@@ -1,0 +1,64 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Global Safety Net
+    match /{document=**} { 
+      allow read, write: if false; 
+    }
+
+    // Phase 3: Primitive Definition
+    function isValidId(id) { 
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); 
+    }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    function isSignedIn() { return request.auth != null; }
+
+    // User Profile Validation
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'createdAt', 'updatedAt']) 
+        && data.uid is string && data.uid.size() <= 128
+        && data.createdAt is int
+        && data.updatedAt is int;
+    }
+
+    // User Preferences Validation
+    function isValidUserPreference(data) {
+      return data.keys().hasAll(['userId', 'updatedAt']) 
+        && data.userId is string && data.userId.size() <= 128
+        && data.updatedAt is int;
+    }
+
+    match /users/{userId} {
+      allow read: if isSignedIn() && request.auth.uid == userId;
+      allow create: if isSignedIn() && request.auth.uid == userId 
+        && isValidId(userId)
+        && isValidUser(incoming())
+        && incoming().uid == request.auth.uid
+        && incoming().createdAt == request.time.toMillis()
+        && incoming().updatedAt == request.time.toMillis();
+      allow update: if isSignedIn() && request.auth.uid == userId
+        && isValidUser(incoming())
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time.toMillis()
+        && (incoming().diff(existing()).affectedKeys().hasOnly(['updatedAt', 'displayName', 'email']));
+      allow delete: if false; // Archive rather than delete
+
+      match /preferences/{preferenceId} {
+        allow read: if isSignedIn() && request.auth.uid == userId;
+        allow create: if isSignedIn() && request.auth.uid == userId 
+          && isValidId(preferenceId)
+          && isValidUserPreference(incoming())
+          && incoming().userId == request.auth.uid
+          && incoming().updatedAt == request.time.toMillis();
+        allow update: if isSignedIn() && request.auth.uid == userId
+          && isValidUserPreference(incoming())
+          && incoming().userId == existing().userId
+          && incoming().updatedAt == request.time.toMillis()
+          && (incoming().diff(existing()).affectedKeys().hasOnly(['updatedAt', 'defaultLat', 'defaultLng', 'activeLayers']));
+        allow delete: if false;
+      }
+    }
+  }
+}

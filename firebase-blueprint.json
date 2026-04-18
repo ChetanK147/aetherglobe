@@ -1,0 +1,43 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile containing authentication and preferences data",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "displayName": { "type": "string" },
+        "createdAt": { "type": "number", "description": "Timestamp" },
+        "updatedAt": { "type": "number", "description": "Timestamp" }
+      },
+      "required": ["uid", "createdAt", "updatedAt"]
+    },
+    "UserPreference": {
+      "title": "User Preference",
+      "description": "User settings and saved target locations",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "defaultLat": { "type": "number" },
+        "defaultLng": { "type": "number" },
+        "activeLayers": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["userId", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "The root registry of identified users."
+    },
+    "users/{userId}/preferences/{preferenceId}": {
+      "schema": { "$ref": "#/entities/UserPreference" },
+      "description": "Subcollection holding private app preferences for the user."
+    }
+  }
+}

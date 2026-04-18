@@ -1,0 +1,6 @@
+{
+  "name": "AetherGlobe",
+  "description": "A high-fidelity sci-fi visualization of global traffic, weather patterns, and ocean currents using real-time satellite data and AI intelligence.",
+  "requestFramePermissions": ["geolocation"],
+  "majorCapabilities": ["AI Intelligence", "3D Visualization", "Real-time Data"]
+}
