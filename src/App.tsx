@@ -10,16 +10,31 @@
 
 import React, { useState, useEffect, lazy, Suspense } from 'react';
 import NavigationHUD from './components/NavigationHUD';
+import VisionProHUD from './components/VisionProHUD';
+import TacticalHUD from './components/TacticalHUD';
+import GTA6Interface from './components/GTA6Interface';
+import AuthModal from './components/AuthModal';
 import { AppState, Location } from './types';
 import { getGlobalIntelligence } from './services/geminiService';
 import { getLiveFlights, getCriticalEvents } from './services/liveDataService';
+import { initializeAuth, onAuthChange } from './services/authService';
 
 const AtmosphericGlobe = lazy(() => import('./components/AtmosphericGlobe'));
 const TacticalMap = lazy(() => import('./components/TacticalMap'));
 const IntelligenceCenter = lazy(() => import('./components/IntelligenceCenter'));
 
 export default function App() {
-  const [state, setState] = useState<AppState & { 
+  const [user, setUser] = useState<any>(null);
+  const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [uiMode, setUiMode] = useState<'vision' | 'tactical' | 'gta6'>('vision');
+
+  useEffect(() => {
+    initializeAuth();
+    const unsubscribe = onAuthChange(setUser);
+    return unsubscribe;
+  }, []);
+
+  const [state, setState] = useState<AppState & {
     surfaceViewActive?: boolean;
     liveFlights?: any[];
     criticalEvents?: any[];
@@ -289,7 +304,7 @@ export default function App() {
       )}
 
       <Suspense fallback={null}>
-        <IntelligenceCenter 
+        <IntelligenceCenter
           report={state.intelligenceReport}
           isLoading={state.isLoading}
           layerIntensities={state.layerIntensities}
@@ -301,7 +316,98 @@ export default function App() {
           }}
         />
       </Suspense>
-      
+
+      {uiMode === 'vision' && state.selectedLocation && (
+        <VisionProHUD
+          data={{
+            altitude: state.weather?.temp ? state.weather.temp * 1000 : 35000,
+            speed: state.traffic?.level === 'heavy' ? 450 : 350,
+            heading: Math.random() * 360,
+            timestamp: Date.now()
+          }}
+        />
+      )}
+
+      {uiMode === 'tactical' && (
+        <TacticalHUD
+          data={{
+            threats: state.criticalEvents?.length || 0,
+            targets: state.liveFlights?.length || 0,
+            contacts: (state.liveFlights?.length || 0) + (state.criticalEvents?.length || 0),
+            scanRadius: 250
+          }}
+        />
+      )}
+
+      {uiMode === 'gta6' && (
+        <GTA6Interface
+          data={{
+            radar: (state.liveFlights || []).slice(0, 5).map((f: any, i: number) => ({
+              x: (Math.sin(i) * 0.5),
+              y: (Math.cos(i) * 0.5),
+              type: i % 3 === 0 ? 'threat' : 'npc'
+            })),
+            health: 85,
+            armor: 60,
+            wanted: state.criticalEvents?.length || 0,
+            location: `${state.selectedLocation?.lat.toFixed(2)}, ${state.selectedLocation?.lng.toFixed(2)}`
+          }}
+        />
+      )}
+
+      <div className="absolute top-4 right-4 flex gap-2 z-40 pointer-events-auto">
+        <button
+          onClick={() => setUiMode('vision')}
+          className={`px-3 py-2 rounded-lg text-xs font-semibold transition ${
+            uiMode === 'vision'
+              ? 'bg-blue-600 text-white'
+              : 'bg-white/10 text-white/60 hover:bg-white/20'
+          }`}
+        >
+          Vision Pro
+        </button>
+        <button
+          onClick={() => setUiMode('tactical')}
+          className={`px-3 py-2 rounded-lg text-xs font-semibold transition ${
+            uiMode === 'tactical'
+              ? 'bg-red-600 text-white'
+              : 'bg-white/10 text-white/60 hover:bg-white/20'
+          }`}
+        >
+          Tactical
+        </button>
+        <button
+          onClick={() => setUiMode('gta6')}
+          className={`px-3 py-2 rounded-lg text-xs font-semibold transition ${
+            uiMode === 'gta6'
+              ? 'bg-yellow-600 text-white'
+              : 'bg-white/10 text-white/60 hover:bg-white/20'
+          }`}
+        >
+          GTA VI
+        </button>
+        {user ? (
+          <span className="px-3 py-2 text-xs text-white/60">
+            {user.email?.split('@')[0]}
+          </span>
+        ) : (
+          <button
+            onClick={() => setAuthModalOpen(true)}
+            className="px-3 py-2 rounded-lg text-xs font-semibold bg-white/10 text-white/60 hover:bg-white/20 transition"
+          >
+            Sign In
+          </button>
+        )}
+      </div>
+
+      <AuthModal
+        isOpen={authModalOpen}
+        onClose={() => setAuthModalOpen(false)}
+        onSuccess={() => {
+          setAuthModalOpen(false);
+        }}
+      />
+
       <div className="absolute inset-0 pointer-events-none scanline opacity-30 z-50" />
     </div>
   );
