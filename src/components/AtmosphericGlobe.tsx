@@ -32,7 +32,6 @@ const AtmosphericGlobe: React.FC<AtmosphericGlobeProps> = ({
   useEffect(() => {
     const controls = globeRef.current?.controls();
     if (!controls) return;
-    controls.autoRotate = true;
     controls.autoRotateSpeed = 0.35;
     controls.enableDamping = true;
     controls.dampingFactor = 0.05;
@@ -41,8 +40,16 @@ const AtmosphericGlobe: React.FC<AtmosphericGlobeProps> = ({
   }, []);
 
   useEffect(() => {
+    const controls = globeRef.current?.controls();
+    if (!controls) return;
+    controls.autoRotate = !(targetLocation || userLocation);
+  }, [targetLocation, userLocation]);
+
+  useEffect(() => {
     const target = targetLocation || userLocation;
     if (target && globeRef.current) {
+      const controls = globeRef.current.controls?.();
+      if (controls) controls.autoRotate = false;
       globeRef.current.pointOfView({ lat: target.lat, lng: target.lng, altitude: 1.5 }, 1500);
     }
   }, [targetLocation, userLocation]);
