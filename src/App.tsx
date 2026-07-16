@@ -12,7 +12,6 @@ const AtmosphericGlobe = lazy(() => import('./components/AtmosphericGlobe'));
 const TacticalMap = lazy(() => import('./components/TacticalMap'));
 const IntelligenceCenter = lazy(() => import('./components/IntelligenceCenter'));
 
-const DEFAULT_LOCATION = { lat: 34.0151, lng: 71.5249 };
 type UiMode = 'vision' | 'tactical' | 'gta6';
 type MobilePanel = 'intelligence' | 'status' | null;
 
@@ -61,7 +60,7 @@ export default function App() {
   const [mobilePanel, setMobilePanel] = useState<MobilePanel>(null);
   const [state, setState] = useState<AppState>({
     userLocation: null,
-    selectedLocation: DEFAULT_LOCATION,
+    selectedLocation: null,
     intelligenceReport: null,
     isLoading: false,
     weather: null,
@@ -76,11 +75,12 @@ export default function App() {
   });
 
   useEffect(() => {
+    const selected = state.selectedLocation;
+    if (!selected) return;
+
     let active = true;
 
     const fetchGlobalData = async () => {
-      const selected = state.selectedLocation;
-      if (!selected) return;
       const radius = 10;
       const minLat = Math.max(-90, selected.lat - radius);
       const maxLat = Math.min(90, selected.lat + radius);
@@ -106,14 +106,6 @@ export default function App() {
       window.clearInterval(interval);
     };
   }, [state.selectedLocation]);
-
-  useEffect(() => {
-    void handleIntelligenceRequest(
-      DEFAULT_LOCATION.lat,
-      DEFAULT_LOCATION.lng,
-      'Provide a baseline overview for this regional hub.',
-    );
-  }, []);
 
   const handleIntensityChange = (layerName: string, value: number) => {
     setState((previous) => ({
@@ -144,7 +136,14 @@ export default function App() {
   const handleLocationSelect = (lat: number, lng: number) => {
     const selectedLocation = { lat, lng };
     setMobilePanel(null);
-    setState((previous) => ({ ...previous, selectedLocation }));
+    setState((previous) => ({
+      ...previous,
+      selectedLocation,
+      intelligenceReport: null,
+      weather: null,
+      liveFlights: [],
+      criticalEvents: [],
+    }));
     void handleIntelligenceRequest(lat, lng, 'Analyze this selected location using verified sources.');
   };
 
@@ -162,6 +161,10 @@ export default function App() {
           ...previous,
           userLocation: location,
           selectedLocation: location,
+          intelligenceReport: null,
+          weather: null,
+          liveFlights: [],
+          criticalEvents: [],
         }));
         void handleIntelligenceRequest(
           location.lat,
@@ -178,6 +181,7 @@ export default function App() {
   };
 
   const toggleSurfaceMap = () => {
+    if (!state.selectedLocation) return;
     setMobilePanel(null);
     setState((previous) => ({ ...previous, surfaceViewActive: !previous.surfaceViewActive }));
   };
@@ -209,7 +213,7 @@ export default function App() {
         onMobileClose={() => setMobilePanel(null)}
         onGeolocate={requestGeolocation}
         onCoordinateSubmit={handleLocationSelect}
-        onToggleSurface={toggleSurfaceMap}
+        onToggleSurface={state.selectedLocation ? toggleSurfaceMap : undefined}
       />
 
       {state.surfaceViewActive && state.selectedLocation && (
@@ -217,6 +221,8 @@ export default function App() {
           <TacticalMap
             lat={state.selectedLocation.lat}
             lng={state.selectedLocation.lng}
+            flights={state.liveFlights}
+            flightIntensity={state.layerIntensities['Global Air Traffic'] ?? 0}
             onClose={() => setState((previous) => ({ ...previous, surfaceViewActive: false }))}
           />
         </Suspense>
@@ -317,8 +323,9 @@ export default function App() {
         <button
           type="button"
           onClick={toggleSurfaceMap}
+          disabled={!state.selectedLocation}
           aria-pressed={state.surfaceViewActive}
-          className={`flex min-h-11 items-center justify-center gap-2 rounded-xl text-[0.68rem] font-bold uppercase ${state.surfaceViewActive ? 'bg-accent text-black' : 'bg-white/5 text-accent'}`}
+          className={`flex min-h-11 items-center justify-center gap-2 rounded-xl text-[0.68rem] font-bold uppercase disabled:cursor-not-allowed disabled:opacity-30 ${state.surfaceViewActive ? 'bg-accent text-black' : 'bg-white/5 text-accent'}`}
         >
           <MapIcon size={16} /> Map
         </button>
