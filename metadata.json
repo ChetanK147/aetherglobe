@@ -1,6 +1,6 @@
 {
   "name": "AetherGlobe",
-  "description": "A high-fidelity sci-fi visualization of global traffic, weather patterns, and ocean currents using real-time satellite data and AI intelligence.",
+  "description": "A cinematic 3D globe using current weather, USGS earthquake data, a public aircraft feed, and server-side AI location analysis.",
   "requestFramePermissions": ["geolocation"],
-  "majorCapabilities": ["AI Intelligence", "3D Visualization", "Real-time Data"]
+  "majorCapabilities": ["AI Location Analysis", "3D Visualization", "Weather", "Earthquake Events", "Aircraft Visualization"]
 }
