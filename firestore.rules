@@ -1,64 +1,64 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // 0. Global Safety Net
-    match /{document=**} { 
-      allow read, write: if false; 
+    function isSignedIn() {
+      return request.auth != null;
     }
 
-    // Phase 3: Primitive Definition
-    function isValidId(id) { 
-      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); 
-    }
-    function incoming() { return request.resource.data; }
-    function existing() { return resource.data; }
-    function isSignedIn() { return request.auth != null; }
-
-    // User Profile Validation
-    function isValidUser(data) {
-      return data.keys().hasAll(['uid', 'createdAt', 'updatedAt']) 
-        && data.uid is string && data.uid.size() <= 128
-        && data.createdAt is int
-        && data.updatedAt is int;
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
     }
 
-    // User Preferences Validation
-    function isValidUserPreference(data) {
-      return data.keys().hasAll(['userId', 'updatedAt']) 
-        && data.userId is string && data.userId.size() <= 128
-        && data.updatedAt is int;
+    function isValidId(id) {
+      return id is string
+        && id.size() <= 128
+        && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function validUserCreate(userId) {
+      return request.resource.data.keys().hasOnly([
+          'uid', 'email', 'displayName', 'createdAt', 'updatedAt'
+        ])
+        && request.resource.data.keys().hasAll(['uid', 'createdAt', 'updatedAt'])
+        && request.resource.data.uid == userId
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+    }
+
+    function validUserUpdate() {
+      return request.resource.data.uid == resource.data.uid
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['email', 'displayName', 'updatedAt']);
     }
 
     match /users/{userId} {
-      allow read: if isSignedIn() && request.auth.uid == userId;
-      allow create: if isSignedIn() && request.auth.uid == userId 
-        && isValidId(userId)
-        && isValidUser(incoming())
-        && incoming().uid == request.auth.uid
-        && incoming().createdAt == request.time.toMillis()
-        && incoming().updatedAt == request.time.toMillis();
-      allow update: if isSignedIn() && request.auth.uid == userId
-        && isValidUser(incoming())
-        && incoming().uid == existing().uid
-        && incoming().createdAt == existing().createdAt
-        && incoming().updatedAt == request.time.toMillis()
-        && (incoming().diff(existing()).affectedKeys().hasOnly(['updatedAt', 'displayName', 'email']));
-      allow delete: if false; // Archive rather than delete
+      allow read: if isOwner(userId);
+      allow create: if isOwner(userId) && isValidId(userId) && validUserCreate(userId);
+      allow update: if isOwner(userId) && validUserUpdate();
+      allow delete: if false;
 
       match /preferences/{preferenceId} {
-        allow read: if isSignedIn() && request.auth.uid == userId;
-        allow create: if isSignedIn() && request.auth.uid == userId 
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId)
           && isValidId(preferenceId)
-          && isValidUserPreference(incoming())
-          && incoming().userId == request.auth.uid
-          && incoming().updatedAt == request.time.toMillis();
-        allow update: if isSignedIn() && request.auth.uid == userId
-          && isValidUserPreference(incoming())
-          && incoming().userId == existing().userId
-          && incoming().updatedAt == request.time.toMillis()
-          && (incoming().diff(existing()).affectedKeys().hasOnly(['updatedAt', 'defaultLat', 'defaultLng', 'activeLayers']));
+          && request.resource.data.keys().hasOnly([
+            'userId', 'defaultLat', 'defaultLng', 'activeLayers', 'updatedAt'
+          ])
+          && request.resource.data.userId == userId
+          && request.resource.data.updatedAt == request.time;
+        allow update: if isOwner(userId)
+          && request.resource.data.userId == resource.data.userId
+          && request.resource.data.updatedAt == request.time
+          && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['defaultLat', 'defaultLng', 'activeLayers', 'updatedAt']);
         allow delete: if false;
       }
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
     }
   }
 }
