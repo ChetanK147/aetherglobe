@@ -1,4 +1,4 @@
-import LRU from 'lru-cache';
+import { LRUCache } from 'lru-cache';
 
 interface CacheEntry<T> {
   data: T;
@@ -7,234 +7,134 @@ interface CacheEntry<T> {
 }
 
 class LiveDataAggregator {
-  private cache: LRU<string, any>;
-  private wsConnections: Map<string, WebSocket> = new Map();
-  private reconnectAttempts: Map<string, number> = new Map();
-  private maxReconnectAttempts = 5;
+  private cache = new LRUCache<string, CacheEntry<unknown>>({
+    max: 1000,
+    ttl: 5 * 60 * 1000,
+  });
 
-  constructor() {
-    this.cache = new LRU({
-      max: 1000,
-      maxSize: 50_000_000,
-      sizeCalculation: () => 1,
-      ttl: 1000 * 60 * 5
-    });
-  }
+  private wsConnections = new Map<string, WebSocket>();
+  private reconnectAttempts = new Map<string, number>();
+  private reconnectTimers = new Map<string, number>();
+  private readonly maxReconnectAttempts = 5;
 
-  private getCacheKey(source: string, params: Record<string, any>): string {
+  private getCacheKey(source: string, params: Record<string, unknown>) {
     return `${source}:${JSON.stringify(params)}`;
   }
 
-  private isCacheValid(entry: CacheEntry<any>): boolean {
-    return Date.now() - entry.timestamp < entry.ttl;
+  private readCache<T>(key: string): T | undefined {
+    const entry = this.cache.get(key);
+    if (!entry || Date.now() - entry.timestamp >= entry.ttl) return undefined;
+    return entry.data as T;
+  }
+
+  private writeCache<T>(key: string, data: T, ttl: number) {
+    this.cache.set(key, { data, timestamp: Date.now(), ttl }, { ttl });
+  }
+
+  private async fetchJson<T>(url: string, fallback: T): Promise<T> {
+    try {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`Request failed with ${response.status}`);
+      return await response.json() as T;
+    } catch (error) {
+      console.error(`Live data request failed for ${url}:`, error);
+      return fallback;
+    }
   }
 
   async fetchADSB(bounds: { lamax: number; lamin: number; lomin: number; lomax: number }) {
-    const cacheKey = this.getCacheKey('adsb', bounds);
-    const cached = this.cache.get(cacheKey);
-
-    if (cached && this.isCacheValid(cached)) {
-      return cached.data;
-    }
-
-    try {
-      const response = await fetch(
-        `/api/live/adsb?lamax=${bounds.lamax}&lamin=${bounds.lamin}&lomin=${bounds.lomin}&lomax=${bounds.lomax}`
-      );
-      const data = await response.json();
-
-      this.cache.set(cacheKey, {
-        data,
-        timestamp: Date.now(),
-        ttl: 10000
-      });
-
-      return data;
-    } catch (error) {
-      console.error('ADSB fetch failed:', error);
-      return { aircraft: [] };
-    }
+    const key = this.getCacheKey('adsb', bounds);
+    const cached = this.readCache<{ aircraft: unknown[] }>(key);
+    if (cached) return cached;
+    const data = await this.fetchJson(`/api/live/adsb?${new URLSearchParams(Object.entries(bounds).map(([k, v]) => [k, String(v)]))}`, { aircraft: [] });
+    this.writeCache(key, data, 10_000);
+    return data;
   }
 
   async fetchMarineTraffic(bounds: { lamax: number; lamin: number; lomin: number; lomax: number }) {
-    const cacheKey = this.getCacheKey('marine', bounds);
-    const cached = this.cache.get(cacheKey);
-
-    if (cached && this.isCacheValid(cached)) {
-      return cached.data;
-    }
-
-    try {
-      const response = await fetch(
-        `/api/live/marine?lamax=${bounds.lamax}&lamin=${bounds.lamin}&lomin=${bounds.lomin}&lomax=${bounds.lomax}`
-      );
-      const data = await response.json();
-
-      this.cache.set(cacheKey, {
-        data,
-        timestamp: Date.now(),
-        ttl: 30000
-      });
-
-      return data;
-    } catch (error) {
-      console.error('Marine traffic fetch failed:', error);
-      return { vessels: [] };
-    }
+    const key = this.getCacheKey('marine', bounds);
+    const cached = this.readCache<{ vessels: unknown[]; simulated?: boolean }>(key);
+    if (cached) return cached;
+    const data = await this.fetchJson(`/api/live/marine?${new URLSearchParams(Object.entries(bounds).map(([k, v]) => [k, String(v)]))}`, { vessels: [], simulated: true });
+    this.writeCache(key, data, 30_000);
+    return data;
   }
 
   async fetchUSGS() {
-    const cacheKey = 'usgs:global';
-    const cached = this.cache.get(cacheKey);
-
-    if (cached && this.isCacheValid(cached)) {
-      return cached.data;
-    }
-
-    try {
-      const response = await fetch('/api/live/usgs');
-      const data = await response.json();
-
-      this.cache.set(cacheKey, {
-        data,
-        timestamp: Date.now(),
-        ttl: 60000
-      });
-
-      return data;
-    } catch (error) {
-      console.error('USGS fetch failed:', error);
-      return { earthquakes: [] };
-    }
+    const key = 'usgs:global';
+    const cached = this.readCache<{ earthquakes: unknown[] }>(key);
+    if (cached) return cached;
+    const data = await this.fetchJson('/api/live/usgs', { earthquakes: [] });
+    this.writeCache(key, data, 60_000);
+    return data;
   }
 
   async fetchNASAFIRMS() {
-    const cacheKey = 'nasa-firms:global';
-    const cached = this.cache.get(cacheKey);
-
-    if (cached && this.isCacheValid(cached)) {
-      return cached.data;
-    }
-
-    try {
-      const response = await fetch('/api/live/nasa-firms');
-      const data = await response.json();
-
-      this.cache.set(cacheKey, {
-        data,
-        timestamp: Date.now(),
-        ttl: 60000
-      });
-
-      return data;
-    } catch (error) {
-      console.error('NASA FIRMS fetch failed:', error);
-      return { fires: [] };
-    }
+    const key = 'nasa-firms:global';
+    const cached = this.readCache<{ fires: unknown[] }>(key);
+    if (cached) return cached;
+    const data = await this.fetchJson('/api/live/nasa-firms', { fires: [] });
+    this.writeCache(key, data, 60_000);
+    return data;
   }
 
   async fetchGTFS(city: string) {
-    const cacheKey = this.getCacheKey('gtfs', { city });
-    const cached = this.cache.get(cacheKey);
-
-    if (cached && this.isCacheValid(cached)) {
-      return cached.data;
-    }
-
-    try {
-      const response = await fetch(`/api/live/gtfs/${city}`);
-      const data = await response.json();
-
-      this.cache.set(cacheKey, {
-        data,
-        timestamp: Date.now(),
-        ttl: 45000
-      });
-
-      return data;
-    } catch (error) {
-      console.error('GTFS fetch failed:', error);
-      return { routes: [], stops: [] };
-    }
+    const safeCity = encodeURIComponent(city.slice(0, 80));
+    const key = this.getCacheKey('gtfs', { city: safeCity });
+    const cached = this.readCache<{ routes: unknown[]; stops: unknown[]; simulated?: boolean }>(key);
+    if (cached) return cached;
+    const data = await this.fetchJson(`/api/live/gtfs/${safeCity}`, { routes: [], stops: [], simulated: true });
+    this.writeCache(key, data, 45_000);
+    return data;
   }
 
   async fetchTomTomTraffic(bounds: { lamax: number; lamin: number; lomin: number; lomax: number }) {
-    const cacheKey = this.getCacheKey('tomtom-traffic', bounds);
-    const cached = this.cache.get(cacheKey);
-
-    if (cached && this.isCacheValid(cached)) {
-      return cached.data;
-    }
-
-    try {
-      const response = await fetch(
-        `/api/live/tomtom-traffic?lamax=${bounds.lamax}&lamin=${bounds.lamin}&lomin=${bounds.lomin}&lomax=${bounds.lomax}`
-      );
-      const data = await response.json();
-
-      this.cache.set(cacheKey, {
-        data,
-        timestamp: Date.now(),
-        ttl: 20000
-      });
-
-      return data;
-    } catch (error) {
-      console.error('TomTom traffic fetch failed:', error);
-      return { incidents: [], flows: [] };
-    }
+    const key = this.getCacheKey('tomtom', bounds);
+    const cached = this.readCache<{ incidents: unknown[]; flows: unknown[]; simulated?: boolean }>(key);
+    if (cached) return cached;
+    const data = await this.fetchJson(`/api/live/tomtom-traffic?${new URLSearchParams(Object.entries(bounds).map(([k, v]) => [k, String(v)]))}`, { incidents: [], flows: [], simulated: true });
+    this.writeCache(key, data, 20_000);
+    return data;
   }
 
-  subscribeToStream(source: string, onData: (data: any) => void) {
-    const wsUrl = `/ws/live/${source}`;
+  subscribeToStream(source: string, onData: (data: unknown) => void) {
+    if (this.wsConnections.has(source)) return;
 
-    if (this.wsConnections.has(source)) {
-      return;
-    }
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(`${protocol}//${window.location.host}/ws/live/${encodeURIComponent(source)}`);
 
-    const ws = new WebSocket(wsUrl);
-
-    ws.onopen = () => {
-      console.log(`Connected to ${source} stream`);
-      this.reconnectAttempts.set(source, 0);
-    };
-
+    ws.onopen = () => this.reconnectAttempts.set(source, 0);
     ws.onmessage = (event) => {
       try {
-        const data = JSON.parse(event.data);
-        onData(data);
+        onData(JSON.parse(event.data));
       } catch (error) {
-        console.error(`Failed to parse ${source} data:`, error);
+        console.error(`Failed to parse ${source} stream data:`, error);
       }
     };
-
-    ws.onerror = (error) => {
-      console.error(`WebSocket error for ${source}:`, error);
-    };
-
+    ws.onerror = (error) => console.error(`WebSocket error for ${source}:`, error);
     ws.onclose = () => {
-      console.log(`Disconnected from ${source} stream`);
       this.wsConnections.delete(source);
-
       const attempts = this.reconnectAttempts.get(source) || 0;
-      if (attempts < this.maxReconnectAttempts) {
-        const delay = Math.pow(2, attempts) * 1000;
-        setTimeout(() => {
-          this.reconnectAttempts.set(source, attempts + 1);
-          this.subscribeToStream(source, onData);
-        }, delay);
-      }
+      if (attempts >= this.maxReconnectAttempts) return;
+      const timer = window.setTimeout(() => {
+        this.reconnectAttempts.set(source, attempts + 1);
+        this.subscribeToStream(source, onData);
+      }, 2 ** attempts * 1000);
+      this.reconnectTimers.set(source, timer);
     };
 
     this.wsConnections.set(source, ws);
   }
 
   unsubscribeFromStream(source: string) {
+    const timer = this.reconnectTimers.get(source);
+    if (timer) window.clearTimeout(timer);
+    this.reconnectTimers.delete(source);
+    this.reconnectAttempts.delete(source);
+
     const ws = this.wsConnections.get(source);
-    if (ws) {
-      ws.close();
-      this.wsConnections.delete(source);
-    }
+    if (ws) ws.close();
+    this.wsConnections.delete(source);
   }
 
   clearCache() {
@@ -242,10 +142,7 @@ class LiveDataAggregator {
   }
 
   getCacheStats() {
-    return {
-      size: this.cache.size,
-      maxSize: this.cache.maxSize
-    };
+    return { size: this.cache.size, maxSize: this.cache.max };
   }
 }
 
