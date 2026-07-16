@@ -1,8 +1,8 @@
 import express, { type NextFunction, type Request, type Response } from 'express';
 import path from 'path';
+import { createHash } from 'crypto';
 import { createServer as createHttpServer } from 'http';
 import { createServer as createViteServer } from 'vite';
-import { GoogleGenAI } from '@google/genai';
 import { LRUCache } from 'lru-cache';
 import dotenv from 'dotenv';
 
@@ -11,8 +11,38 @@ dotenv.config();
 
 const PORT = Number(process.env.PORT || 3000);
 const REQUEST_TIMEOUT_MS = 12_000;
+const GEMINI_TIMEOUT_MS = 30_000;
 const responseCache = new LRUCache<string, unknown>({ max: 500, ttl: 60_000 });
 const rateBuckets = new LRUCache<string, { count: number; resetAt: number }>({ max: 5_000, ttl: 60_000 });
+
+interface WeatherSnapshot {
+  temp: number | null;
+  humidity: number | null;
+  windSpeed: number | null;
+  weatherCode: number | null;
+  observed: string | null;
+  source: 'open-meteo';
+}
+
+interface Earthquake {
+  id: string;
+  magnitude: number | null;
+  place: string;
+  time: number;
+  lat: number;
+  lng: number;
+  depth: number | null;
+  url: string;
+}
+
+interface GeminiGenerateResponse {
+  candidates?: Array<{
+    content?: {
+      parts?: Array<{ text?: string }>;
+    };
+  }>;
+  error?: { message?: string };
+}
 
 function asyncRoute(handler: (req: Request, res: Response) => Promise<void>) {
   return (req: Request, res: Response, next: NextFunction) => {
@@ -56,9 +86,9 @@ function parseBounds(query: Request['query']) {
   return { lamin, lamax, lomin, lomax };
 }
 
-async function fetchWithTimeout(url: string, init: RequestInit = {}) {
+async function fetchWithTimeout(url: string, init: RequestInit = {}, timeoutMs = REQUEST_TIMEOUT_MS) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(url, { ...init, signal: controller.signal });
   } finally {
@@ -74,6 +104,169 @@ function setCached(key: string, value: unknown, ttl: number) {
   responseCache.set(key, value, { ttl });
 }
 
+async function getWeatherSnapshot(lat: number, lng: number): Promise<WeatherSnapshot> {
+  const cacheKey = `weather:${lat.toFixed(3)}:${lng.toFixed(3)}`;
+  const cached = getCached<WeatherSnapshot>(cacheKey);
+  if (cached) return cached;
+
+  const url = new URL('https://api.open-meteo.com/v1/forecast');
+  url.searchParams.set('latitude', String(lat));
+  url.searchParams.set('longitude', String(lng));
+  url.searchParams.set('current', 'temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m');
+  url.searchParams.set('timezone', 'auto');
+
+  const response = await fetchWithTimeout(url.toString());
+  if (!response.ok) throw Object.assign(new Error('Weather provider unavailable'), { status: 502 });
+  const data = await response.json() as {
+    current?: {
+      temperature_2m?: number;
+      relative_humidity_2m?: number;
+      weather_code?: number;
+      wind_speed_10m?: number;
+      time?: string;
+    };
+  };
+  const result: WeatherSnapshot = {
+    temp: data.current?.temperature_2m ?? null,
+    humidity: data.current?.relative_humidity_2m ?? null,
+    windSpeed: data.current?.wind_speed_10m ?? null,
+    weatherCode: data.current?.weather_code ?? null,
+    observed: data.current?.time ?? null,
+    source: 'open-meteo',
+  };
+  setCached(cacheKey, result, 5 * 60_000);
+  return result;
+}
+
+async function getEarthquakes(): Promise<Earthquake[]> {
+  const cacheKey = 'usgs:m4.5-day';
+  const cached = getCached<{ earthquakes: Earthquake[] }>(cacheKey);
+  if (cached) return cached.earthquakes;
+
+  const response = await fetchWithTimeout('https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/4.5_day.geojson');
+  if (!response.ok) throw Object.assign(new Error('USGS unavailable'), { status: 502 });
+  const data = await response.json() as {
+    features?: Array<{
+      id: string;
+      properties: { mag?: number; place?: string; time?: number; url?: string };
+      geometry: { coordinates: [number, number, number] };
+    }>;
+  };
+  const earthquakes = (data.features || []).slice(0, 100).map((feature) => ({
+    id: feature.id,
+    magnitude: feature.properties.mag ?? null,
+    place: feature.properties.place || 'Unknown location',
+    time: feature.properties.time || 0,
+    lat: feature.geometry.coordinates[1],
+    lng: feature.geometry.coordinates[0],
+    depth: feature.geometry.coordinates[2] ?? null,
+    url: feature.properties.url || '',
+  }));
+  setCached(cacheKey, { earthquakes, source: 'usgs', timestamp: Date.now() }, 60_000);
+  return earthquakes;
+}
+
+function distanceKm(lat1: number, lng1: number, lat2: number, lng2: number) {
+  const toRadians = (degrees: number) => degrees * Math.PI / 180;
+  const earthRadiusKm = 6_371;
+  const dLat = toRadians(lat2 - lat1);
+  const dLng = toRadians(lng2 - lng1);
+  const a = Math.sin(dLat / 2) ** 2
+    + Math.cos(toRadians(lat1)) * Math.cos(toRadians(lat2)) * Math.sin(dLng / 2) ** 2;
+  return earthRadiusKm * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function formatNumber(value: number | null, suffix = '') {
+  return value === null ? 'Unavailable' : `${Math.round(value)}${suffix}`;
+}
+
+function buildLocalIntelligence(
+  lat: number,
+  lng: number,
+  context: string,
+  weather: WeatherSnapshot | null,
+  earthquakes: Earthquake[],
+) {
+  const nearby = earthquakes
+    .map((event) => ({ ...event, distanceKm: distanceKm(lat, lng, event.lat, event.lng) }))
+    .sort((a, b) => a.distanceKm - b.distanceKm)
+    .slice(0, 3);
+
+  const seismicLines = nearby.length > 0
+    ? nearby.map((event) => `- M${event.magnitude ?? '—'} · ${event.place} · approximately ${Math.round(event.distanceKm)} km away`).join('\n')
+    : '- No M4.5+ events were available in the current USGS one-day feed.';
+
+  const weatherLines = weather
+    ? [
+        `- Temperature: ${formatNumber(weather.temp, '°C')}`,
+        `- Humidity: ${formatNumber(weather.humidity, '%')}`,
+        `- Wind: ${formatNumber(weather.windSpeed, ' km/h')}`,
+        `- Observation time: ${weather.observed || 'Unavailable'}`,
+      ].join('\n')
+    : '- Current weather could not be retrieved.';
+
+  return `# Location Intelligence\n\n**Coordinates:** ${lat.toFixed(4)}, ${lng.toFixed(4)}  \n**Mode:** Verified source summary\n\n## Current weather\n${weatherLines}\n\n## Nearby seismic context\n${seismicLines}\n\n## Requested focus\n${context || 'General location overview'}\n\n## Sources and limits\n- Weather: Open-Meteo current conditions.\n- Seismic events: USGS M4.5+ one-day feed.\n- This fallback does not infer live traffic, transit, maritime, police, military or emergency-response activity.\n- AetherGlobe is exploratory and must not be used for operational decisions.`;
+}
+
+async function callGemini(model: string, apiKey: string, prompt: string) {
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+  const response = await fetchWithTimeout(endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-goog-api-key': apiKey,
+    },
+    body: JSON.stringify({
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      generationConfig: {
+        temperature: 0.2,
+        maxOutputTokens: 2_500,
+      },
+    }),
+  }, GEMINI_TIMEOUT_MS);
+
+  const payload = await response.json() as GeminiGenerateResponse;
+  if (!response.ok) {
+    throw new Error(payload.error?.message || `Gemini ${model} request failed with ${response.status}`);
+  }
+
+  const text = payload.candidates
+    ?.flatMap((candidate) => candidate.content?.parts || [])
+    .map((part) => part.text || '')
+    .join('\n')
+    .trim();
+  if (!text) throw new Error(`Gemini ${model} returned no text`);
+  return text;
+}
+
+async function enrichIntelligence(
+  localReport: string,
+  context: string,
+  useDeepThinking: boolean,
+  apiKey: string,
+) {
+  const configuredModel = process.env.GEMINI_MODEL?.trim();
+  const models = Array.from(new Set([
+    configuredModel,
+    'gemini-3.5-flash',
+    'gemini-2.5-flash',
+  ].filter((model): model is string => Boolean(model))));
+
+  const prompt = `You are AetherAI, a cautious location intelligence assistant. Rewrite and enrich the verified source summary below for the user's request. Preserve every source limitation, clearly distinguish sourced current observations from general background, and do not invent live traffic, transit, maritime, police, military or emergency-response feeds. ${useDeepThinking ? 'Provide a more detailed risk-aware interpretation, but remain concise and explicit about uncertainty.' : 'Keep the response concise and practical.'}\n\nUSER REQUEST:\n${context || 'General location overview'}\n\nVERIFIED SOURCE SUMMARY:\n${localReport}`;
+
+  const failures: string[] = [];
+  for (const model of models) {
+    try {
+      return { report: await callGemini(model, apiKey, prompt), model };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      failures.push(`${model}: ${message}`);
+      console.warn(`Gemini model fallback failed (${model}):`, message);
+    }
+  }
+  throw new Error(failures.join(' | '));
+}
+
 async function startServer() {
   const app = express();
   const httpServer = createHttpServer(app);
@@ -87,64 +280,59 @@ async function startServer() {
     const lng = parseCoordinate(req.body?.lng, -180, 180, 'longitude');
     const context = typeof req.body?.context === 'string' ? req.body.context.trim().slice(0, 1_200) : '';
     const useDeepThinking = req.body?.useDeepThinking === true;
-    const apiKey = process.env.GEMINI_API_KEY;
-
-    if (!apiKey) {
-      res.status(503).json({ error: 'AI service is not configured' });
-      return;
-    }
-
-    const ai = new GoogleGenAI({ apiKey });
-    const config: Record<string, unknown> = useDeepThinking
-      ? { tools: [{ googleSearch: {} }], thinkingConfig: { thinkingLevel: 'HIGH' } }
-      : {
-          tools: [{ googleMaps: {} }],
-          toolConfig: { retrievalConfig: { latLng: { latitude: lat, longitude: lng } } },
-        };
-
-    const response = await (ai.models as any).generateContent({
-      model: useDeepThinking ? 'gemini-3.1-pro-preview' : 'gemini-3-flash-preview',
-      contents: [{
-        role: 'user',
-        parts: [{
-          text: `You are AetherAI, a location intelligence assistant. Analyze coordinates (${lat}, ${lng}). User request: ${context || 'General location overview'}. Separate sourced facts from estimates. Never imply that AetherGlobe has live traffic, transit, maritime, police, military, or emergency-response feeds. Use concise sections and name sources where possible.`,
-        }],
-      }],
-      config,
-    });
-
-    res.json({ report: response.text || 'No intelligence report returned.' });
-  }));
-
-  app.get('/api/weather', asyncRoute(async (req, res) => {
-    const lat = parseCoordinate(req.query.lat, -90, 90, 'latitude');
-    const lng = parseCoordinate(req.query.lng, -180, 180, 'longitude');
-    const cacheKey = `weather:${lat.toFixed(3)}:${lng.toFixed(3)}`;
+    const contextHash = createHash('sha256').update(`${lat}:${lng}:${context}:${useDeepThinking}`).digest('hex').slice(0, 20);
+    const cacheKey = `intelligence:${contextHash}`;
     const cached = getCached(cacheKey);
     if (cached) {
       res.json(cached);
       return;
     }
 
-    const url = new URL('https://api.open-meteo.com/v1/forecast');
-    url.searchParams.set('latitude', String(lat));
-    url.searchParams.set('longitude', String(lng));
-    url.searchParams.set('current', 'temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m');
-    url.searchParams.set('timezone', 'auto');
+    const [weatherResult, earthquakeResult] = await Promise.allSettled([
+      getWeatherSnapshot(lat, lng),
+      getEarthquakes(),
+    ]);
+    const weather = weatherResult.status === 'fulfilled' ? weatherResult.value : null;
+    const earthquakes = earthquakeResult.status === 'fulfilled' ? earthquakeResult.value : [];
+    const localReport = buildLocalIntelligence(lat, lng, context, weather, earthquakes);
+    const apiKey = process.env.GEMINI_API_KEY?.trim();
 
-    const response = await fetchWithTimeout(url.toString());
-    if (!response.ok) throw Object.assign(new Error('Weather provider unavailable'), { status: 502 });
-    const data = await response.json() as any;
-    const result = {
-      temp: data.current?.temperature_2m ?? null,
-      humidity: data.current?.relative_humidity_2m ?? null,
-      windSpeed: data.current?.wind_speed_10m ?? null,
-      weatherCode: data.current?.weather_code ?? null,
-      observed: data.current?.time ?? null,
-      source: 'open-meteo',
+    let result: Record<string, unknown> = {
+      report: `${localReport}\n\n> AI enrichment is not configured; this report was generated directly from the named data sources.`,
+      mode: 'local-fallback',
+      model: null,
+      sources: ['open-meteo', 'usgs'],
     };
-    setCached(cacheKey, result, 5 * 60_000);
+
+    if (apiKey) {
+      try {
+        const enriched = await enrichIntelligence(localReport, context, useDeepThinking, apiKey);
+        result = {
+          report: enriched.report,
+          mode: 'gemini-enriched',
+          model: enriched.model,
+          sources: ['open-meteo', 'usgs', 'gemini'],
+        };
+      } catch (error) {
+        console.error('Gemini enrichment unavailable; returning local report:', error);
+        result = {
+          report: `${localReport}\n\n> Gemini enrichment was unavailable, so AetherGlobe returned its verified source summary instead.`,
+          mode: 'local-fallback',
+          model: null,
+          sources: ['open-meteo', 'usgs'],
+          warning: 'Gemini enrichment unavailable',
+        };
+      }
+    }
+
+    setCached(cacheKey, result, 2 * 60_000);
     res.json(result);
+  }));
+
+  app.get('/api/weather', asyncRoute(async (req, res) => {
+    const lat = parseCoordinate(req.query.lat, -90, 90, 'latitude');
+    const lng = parseCoordinate(req.query.lng, -180, 180, 'longitude');
+    res.json(await getWeatherSnapshot(lat, lng));
   }));
 
   app.get('/api/flights', asyncRoute(async (req, res) => {
@@ -187,36 +375,17 @@ async function startServer() {
   }));
 
   app.get('/api/live/usgs', asyncRoute(async (_req, res) => {
-    const cacheKey = 'usgs:m4.5-day';
-    const cached = getCached(cacheKey);
-    if (cached) {
-      res.json(cached);
-      return;
-    }
-
-    const response = await fetchWithTimeout('https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/4.5_day.geojson');
-    if (!response.ok) throw Object.assign(new Error('USGS unavailable'), { status: 502 });
-    const data = await response.json() as any;
-    const earthquakes = (data.features || []).slice(0, 100).map((feature: any) => ({
-      id: feature.id,
-      magnitude: feature.properties.mag,
-      place: feature.properties.place,
-      time: feature.properties.time,
-      lat: feature.geometry.coordinates[1],
-      lng: feature.geometry.coordinates[0],
-      depth: feature.geometry.coordinates[2],
-      url: feature.properties.url,
-    }));
-    const result = { earthquakes, source: 'usgs', timestamp: Date.now() };
-    setCached(cacheKey, result, 60_000);
-    res.json(result);
+    res.json({ earthquakes: await getEarthquakes(), source: 'usgs', timestamp: Date.now() });
   }));
 
   app.get('/api/health', (_req, res) => {
+    const configuredModel = process.env.GEMINI_MODEL?.trim() || 'gemini-3.5-flash';
     res.json({
       status: 'ok',
-      version: '4.2.0',
-      aiConfigured: Boolean(process.env.GEMINI_API_KEY),
+      version: '4.3.0',
+      intelligenceMode: process.env.GEMINI_API_KEY ? 'gemini-with-local-fallback' : 'local-source-summary',
+      configuredModel,
+      fallbackModel: 'gemini-2.5-flash',
       cacheEntries: responseCache.size,
       feeds: ['open-meteo', 'usgs', 'flightradar24-unofficial'],
     });
