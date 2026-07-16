@@ -28,24 +28,24 @@ const RecenterMap = ({ lat, lng }: { lat: number; lng: number }) => {
 
 const TacticalMap: React.FC<TacticalMapProps> = ({ lat, lng, onClose }) => (
   <motion.div
-    initial={{ opacity: 0, scale: 0.95 }}
+    initial={{ opacity: 0, scale: 0.97 }}
     animate={{ opacity: 1, scale: 1 }}
-    exit={{ opacity: 0, scale: 0.95 }}
-    className="absolute top-[80px] bottom-[120px] left-[300px] right-[300px] z-[100] glass-panel border border-accent flex flex-col overflow-hidden"
+    exit={{ opacity: 0, scale: 0.97 }}
+    className="fixed inset-x-3 bottom-20 top-20 z-[100] flex flex-col overflow-hidden rounded-xl border border-accent glass-panel lg:absolute lg:bottom-[120px] lg:left-[300px] lg:right-[300px] lg:top-[80px] lg:rounded-none"
     style={{ boxShadow: '0 0 30px rgba(0, 243, 255, 0.15)' }}
   >
-    <div className="flex justify-between items-center bg-black/70 border-b border-accent/30 p-3">
-      <div className="flex items-center gap-3">
-        <MapPin className="text-accent" size={18} />
-        <h2 className="text-accent font-mono uppercase tracking-widest font-bold text-sm">Surface Map</h2>
-        <span className="text-[10px] text-text-muted font-mono bg-white/5 px-2 py-0.5 rounded border border-accent/20">OSM + CARTO</span>
+    <div className="flex min-h-14 items-center justify-between border-b border-accent/30 bg-black/75 px-3 py-2 sm:p-3">
+      <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+        <MapPin className="shrink-0 text-accent" size={18} />
+        <h2 className="truncate font-mono text-xs font-bold uppercase tracking-widest text-accent sm:text-sm">Surface Map</h2>
+        <span className="hidden rounded border border-accent/20 bg-white/5 px-2 py-0.5 font-mono text-[10px] text-text-muted sm:inline">OSM + CARTO</span>
       </div>
-      <button type="button" onClick={onClose} aria-label="Close surface map" className="text-accent/60 hover:text-danger">
+      <button type="button" onClick={onClose} aria-label="Close surface map" className="flex min-h-10 min-w-10 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-accent/70 hover:text-danger">
         <X size={20} />
       </button>
     </div>
 
-    <div className="flex-1 relative bg-[#0a0a0a]">
+    <div className="relative min-h-0 flex-1 bg-[#0a0a0a]">
       <MapContainer center={[lat, lng]} zoom={13} style={{ width: '100%', height: '100%', background: '#0a0a0a' }}>
         <RecenterMap lat={lat} lng={lng} />
         <TileLayer
@@ -60,7 +60,7 @@ const TacticalMap: React.FC<TacticalMapProps> = ({ lat, lng, onClose }) => (
         </Marker>
       </MapContainer>
 
-      <div className="absolute bottom-4 left-4 z-[400] glass-panel bg-black/85 border border-white/10 p-3 text-[10px] font-mono max-w-xs">
+      <div className="absolute bottom-3 left-3 right-3 z-[400] rounded-lg border border-white/10 bg-black/85 p-2.5 font-mono text-[9px] leading-relaxed sm:bottom-4 sm:left-4 sm:right-auto sm:max-w-xs sm:p-3 sm:text-[10px]">
         This view shows a public basemap and the selected coordinate only. Traffic, police, incidents and routing are not connected.
       </div>
     </div>

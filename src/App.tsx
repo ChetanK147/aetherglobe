@@ -1,4 +1,5 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
+import { BrainCircuit, Map as MapIcon, PanelRightOpen } from 'lucide-react';
 import NavigationHUD from './components/NavigationHUD';
 import VisionProHUD from './components/VisionProHUD';
 import TacticalHUD from './components/TacticalHUD';
@@ -12,6 +13,8 @@ const TacticalMap = lazy(() => import('./components/TacticalMap'));
 const IntelligenceCenter = lazy(() => import('./components/IntelligenceCenter'));
 
 const DEFAULT_LOCATION = { lat: 34.0151, lng: 71.5249 };
+type UiMode = 'vision' | 'tactical' | 'gta6';
+type MobilePanel = 'intelligence' | 'status' | null;
 
 function weatherCodeToCondition(code: number | null): string {
   if (code === null) return 'Unavailable';
@@ -54,7 +57,8 @@ async function fetchWeather(lat: number, lng: number): Promise<WeatherData | nul
 }
 
 export default function App() {
-  const [uiMode, setUiMode] = useState<'vision' | 'tactical' | 'gta6'>('vision');
+  const [uiMode, setUiMode] = useState<UiMode>('vision');
+  const [mobilePanel, setMobilePanel] = useState<MobilePanel>(null);
   const [state, setState] = useState<AppState>({
     userLocation: null,
     selectedLocation: DEFAULT_LOCATION,
@@ -139,6 +143,7 @@ export default function App() {
 
   const handleLocationSelect = (lat: number, lng: number) => {
     const selectedLocation = { lat, lng };
+    setMobilePanel(null);
     setState((previous) => ({ ...previous, selectedLocation }));
     void handleIntelligenceRequest(lat, lng, 'Analyze this selected location using verified sources.');
   };
@@ -172,12 +177,17 @@ export default function App() {
     );
   };
 
+  const toggleSurfaceMap = () => {
+    setMobilePanel(null);
+    setState((previous) => ({ ...previous, surfaceViewActive: !previous.surfaceViewActive }));
+  };
+
   const primaryFlight = state.liveFlights[0];
 
   return (
-    <div className="w-screen h-screen bg-bg overflow-hidden relative selection:bg-accent/30 grid grid-rows-[60px_1fr_100px] grid-cols-[280px_1fr_280px] gap-2.5 p-5">
+    <div className="relative h-[100dvh] min-h-[100dvh] w-full overflow-hidden bg-bg selection:bg-accent/30 lg:grid lg:grid-cols-[280px_minmax(0,1fr)_280px] lg:grid-rows-[60px_minmax(0,1fr)_100px] lg:gap-2.5 lg:p-5">
       <div className="absolute inset-0 pointer-events-none z-0">
-        <Suspense fallback={<div className="text-accent flex h-full w-full items-center justify-center font-mono animate-pulse">Establishing orbital link...</div>}>
+        <Suspense fallback={<div className="text-accent flex h-full w-full items-center justify-center px-6 text-center font-mono animate-pulse">Establishing orbital link...</div>}>
           <AtmosphericGlobe
             onLocationSelect={handleLocationSelect}
             userLocation={state.userLocation}
@@ -195,9 +205,11 @@ export default function App() {
         selectedCoord={state.selectedLocation}
         flightCount={state.liveFlights.length}
         eventCount={state.criticalEvents.length}
+        mobileOpen={mobilePanel === 'status'}
+        onMobileClose={() => setMobilePanel(null)}
         onGeolocate={requestGeolocation}
         onCoordinateSubmit={handleLocationSelect}
-        onToggleSurface={() => setState((previous) => ({ ...previous, surfaceViewActive: !previous.surfaceViewActive }))}
+        onToggleSurface={toggleSurfaceMap}
       />
 
       {state.surfaceViewActive && state.selectedLocation && (
@@ -215,6 +227,8 @@ export default function App() {
           report={state.intelligenceReport}
           isLoading={state.isLoading}
           layerIntensities={state.layerIntensities}
+          mobileOpen={mobilePanel === 'intelligence'}
+          onMobileClose={() => setMobilePanel(null)}
           onIntensityChange={handleIntensityChange}
           onAsk={(prompt, useDeepThinking) => {
             if (state.selectedLocation) {
@@ -267,13 +281,15 @@ export default function App() {
         />
       )}
 
-      <div className="absolute top-4 right-4 flex gap-2 z-40 pointer-events-auto">
+      <div className="fixed left-1/2 top-[4.5rem] z-[55] flex -translate-x-1/2 gap-1 rounded-xl border border-white/10 bg-black/65 p-1.5 backdrop-blur-xl lg:absolute lg:top-4">
         {(['vision', 'tactical', 'gta6'] as const).map((mode) => (
           <button
             key={mode}
+            type="button"
             onClick={() => setUiMode(mode)}
-            className={`px-3 py-2 rounded-lg text-xs font-semibold transition ${
-              uiMode === mode ? 'bg-accent text-black' : 'bg-white/10 text-white/60 hover:bg-white/20'
+            aria-pressed={uiMode === mode}
+            className={`min-h-9 rounded-lg px-2.5 text-[0.65rem] font-semibold uppercase tracking-wide transition sm:px-3 sm:text-xs ${
+              uiMode === mode ? 'bg-accent text-black' : 'bg-white/5 text-white/60 hover:bg-white/15'
             }`}
           >
             {mode === 'vision' ? 'Vision' : mode === 'tactical' ? 'Tactical' : 'Cinematic'}
@@ -281,7 +297,34 @@ export default function App() {
         ))}
       </div>
 
-      <div className="absolute inset-0 pointer-events-none scanline opacity-30 z-50" />
+      <nav className="fixed bottom-3 left-3 right-3 z-[75] grid grid-cols-3 gap-2 rounded-2xl border border-accent/20 bg-black/80 p-2 backdrop-blur-xl lg:hidden">
+        <button
+          type="button"
+          onClick={() => setMobilePanel((current) => current === 'intelligence' ? null : 'intelligence')}
+          aria-pressed={mobilePanel === 'intelligence'}
+          className={`flex min-h-11 items-center justify-center gap-2 rounded-xl text-[0.68rem] font-bold uppercase ${mobilePanel === 'intelligence' ? 'bg-accent text-black' : 'bg-white/5 text-accent'}`}
+        >
+          <BrainCircuit size={16} /> Intel
+        </button>
+        <button
+          type="button"
+          onClick={() => setMobilePanel((current) => current === 'status' ? null : 'status')}
+          aria-pressed={mobilePanel === 'status'}
+          className={`flex min-h-11 items-center justify-center gap-2 rounded-xl text-[0.68rem] font-bold uppercase ${mobilePanel === 'status' ? 'bg-accent text-black' : 'bg-white/5 text-accent'}`}
+        >
+          <PanelRightOpen size={16} /> Status
+        </button>
+        <button
+          type="button"
+          onClick={toggleSurfaceMap}
+          aria-pressed={state.surfaceViewActive}
+          className={`flex min-h-11 items-center justify-center gap-2 rounded-xl text-[0.68rem] font-bold uppercase ${state.surfaceViewActive ? 'bg-accent text-black' : 'bg-white/5 text-accent'}`}
+        >
+          <MapIcon size={16} /> Map
+        </button>
+      </nav>
+
+      <div className="absolute inset-0 pointer-events-none scanline opacity-20 z-50" />
     </div>
   );
 }
