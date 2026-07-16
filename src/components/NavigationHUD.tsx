@@ -178,7 +178,7 @@ const NavigationHUD: React.FC<NavigationHUDProps> = ({
 
       <footer className="hidden lg:col-start-1 lg:col-end-4 lg:row-start-3 lg:grid lg:grid-cols-[220px_1fr_220px] lg:items-center lg:border-t lg:border-accent-dim lg:px-5 lg:text-[0.65rem] lg:font-mono glass-panel z-20">
         <div className="flex items-center gap-3 text-accent"><Radio size={16} /><div><strong>LIVE DATA</strong><div className="opacity-50">30-second refresh</div></div></div>
-        <div className="text-center opacity-55">OPEN-METEO · USGS · PUBLIC FLIGHT FEED · GEMINI SERVER PROXY</div>
+        <div className="text-center opacity-55">OPEN-METEO · USGS · PUBLIC FLIGHT FEED · OPENAI SERVER PROXY</div>
         <div className="text-right"><div>AI GENERATED ANALYSIS</div><div className="opacity-50">Verify important claims</div></div>
       </footer>
     </>
