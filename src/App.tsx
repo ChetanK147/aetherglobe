@@ -5,7 +5,7 @@ import VisionProHUD from './components/VisionProHUD';
 import TacticalHUD from './components/TacticalHUD';
 import GTA6Interface from './components/GTA6Interface';
 import type { AppState, WeatherData } from './types';
-import { getGlobalIntelligence } from './services/geminiService';
+import { getGlobalIntelligence } from './services/intelligenceService';
 import { getCriticalEvents, getLiveFlights } from './services/liveDataService';
 
 const AtmosphericGlobe = lazy(() => import('./components/AtmosphericGlobe'));
