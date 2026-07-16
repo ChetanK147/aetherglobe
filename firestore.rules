@@ -38,23 +38,6 @@ service cloud.firestore {
       allow create: if isOwner(userId) && isValidId(userId) && validUserCreate(userId);
       allow update: if isOwner(userId) && validUserUpdate();
       allow delete: if false;
-
-      match /preferences/{preferenceId} {
-        allow read: if isOwner(userId);
-        allow create: if isOwner(userId)
-          && isValidId(preferenceId)
-          && request.resource.data.keys().hasOnly([
-            'userId', 'defaultLat', 'defaultLng', 'activeLayers', 'updatedAt'
-          ])
-          && request.resource.data.userId == userId
-          && request.resource.data.updatedAt == request.time;
-        allow update: if isOwner(userId)
-          && request.resource.data.userId == resource.data.userId
-          && request.resource.data.updatedAt == request.time
-          && request.resource.data.diff(resource.data).affectedKeys()
-            .hasOnly(['defaultLat', 'defaultLng', 'activeLayers', 'updatedAt']);
-        allow delete: if false;
-      }
     }
 
     match /{document=**} {
