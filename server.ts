@@ -14,6 +14,7 @@ const REQUEST_TIMEOUT_MS = 12_000;
 const GEMINI_TIMEOUT_MS = 30_000;
 const responseCache = new LRUCache<string, unknown>({ max: 500, ttl: 60_000 });
 const rateBuckets = new LRUCache<string, { count: number; resetAt: number }>({ max: 5_000, ttl: 60_000 });
+const intelligenceBuckets = new LRUCache<string, { count: number; resetAt: number }>({ max: 5_000, ttl: 60_000 });
 
 interface WeatherSnapshot {
   temp: number | null;
@@ -50,18 +51,37 @@ function asyncRoute(handler: (req: Request, res: Response) => Promise<void>) {
   };
 }
 
-function rateLimit(req: Request, res: Response, next: NextFunction) {
-  const key = req.ip || req.socket.remoteAddress || 'unknown';
+function consumeRateBucket(
+  cache: LRUCache<string, { count: number; resetAt: number }>,
+  key: string,
+  limit: number,
+) {
   const now = Date.now();
-  const existing = rateBuckets.get(key);
+  const existing = cache.get(key);
   const bucket = !existing || existing.resetAt <= now
     ? { count: 1, resetAt: now + 60_000 }
     : { count: existing.count + 1, resetAt: existing.resetAt };
+  cache.set(key, bucket, { ttl: Math.max(1, bucket.resetAt - now) });
+  return { bucket, exceeded: bucket.count > limit, now };
+}
 
-  rateBuckets.set(key, bucket, { ttl: Math.max(1, bucket.resetAt - now) });
-  if (bucket.count > 120) {
+function rateLimit(req: Request, res: Response, next: NextFunction) {
+  const key = req.ip || req.socket.remoteAddress || 'unknown';
+  const { bucket, exceeded, now } = consumeRateBucket(rateBuckets, key, 120);
+  if (exceeded) {
     res.setHeader('Retry-After', Math.ceil((bucket.resetAt - now) / 1000));
     res.status(429).json({ error: 'Too many requests' });
+    return;
+  }
+  next();
+}
+
+function intelligenceRateLimit(req: Request, res: Response, next: NextFunction) {
+  const key = req.ip || req.socket.remoteAddress || 'unknown';
+  const { bucket, exceeded, now } = consumeRateBucket(intelligenceBuckets, key, 20);
+  if (exceeded) {
+    res.setHeader('Retry-After', Math.ceil((bucket.resetAt - now) / 1000));
+    res.status(429).json({ error: 'Too many intelligence requests' });
     return;
   }
   next();
@@ -84,6 +104,11 @@ function parseBounds(query: Request['query']) {
     throw Object.assign(new Error('Invalid bounding box order'), { status: 400 });
   }
   return { lamin, lamax, lomin, lomax };
+}
+
+function normalizeGeminiModel(value: string | undefined) {
+  const model = value?.trim().replace(/^models\//, '');
+  return model && /^[a-z0-9._-]+$/i.test(model) ? model : undefined;
 }
 
 async function fetchWithTimeout(url: string, init: RequestInit = {}, timeoutMs = REQUEST_TIMEOUT_MS) {
@@ -245,7 +270,7 @@ async function enrichIntelligence(
   useDeepThinking: boolean,
   apiKey: string,
 ) {
-  const configuredModel = process.env.GEMINI_MODEL?.trim();
+  const configuredModel = normalizeGeminiModel(process.env.GEMINI_MODEL);
   const models = Array.from(new Set([
     configuredModel,
     'gemini-3.5-flash',
@@ -275,7 +300,7 @@ async function startServer() {
   app.use(express.json({ limit: '32kb' }));
   app.use('/api', rateLimit);
 
-  app.post('/api/intelligence', asyncRoute(async (req, res) => {
+  app.post('/api/intelligence', intelligenceRateLimit, asyncRoute(async (req, res) => {
     const lat = parseCoordinate(req.body?.lat, -90, 90, 'latitude');
     const lng = parseCoordinate(req.body?.lng, -180, 180, 'longitude');
     const context = typeof req.body?.context === 'string' ? req.body.context.trim().slice(0, 1_200) : '';
@@ -308,7 +333,7 @@ async function startServer() {
       try {
         const enriched = await enrichIntelligence(localReport, context, useDeepThinking, apiKey);
         result = {
-          report: enriched.report,
+          report: `${enriched.report}\n\n---\n**Verified current sources:** Open-Meteo weather and USGS M4.5+ one-day seismic feed. Gemini provided narrative enrichment; verify important claims.`,
           mode: 'gemini-enriched',
           model: enriched.model,
           sources: ['open-meteo', 'usgs', 'gemini'],
@@ -379,11 +404,11 @@ async function startServer() {
   }));
 
   app.get('/api/health', (_req, res) => {
-    const configuredModel = process.env.GEMINI_MODEL?.trim() || 'gemini-3.5-flash';
+    const configuredModel = normalizeGeminiModel(process.env.GEMINI_MODEL) || 'gemini-3.5-flash';
     res.json({
       status: 'ok',
       version: '4.3.0',
-      intelligenceMode: process.env.GEMINI_API_KEY ? 'gemini-with-local-fallback' : 'local-source-summary',
+      intelligenceMode: process.env.GEMINI_API_KEY?.trim() ? 'gemini-with-local-fallback' : 'local-source-summary',
       configuredModel,
       fallbackModel: 'gemini-2.5-flash',
       cacheEntries: responseCache.size,
