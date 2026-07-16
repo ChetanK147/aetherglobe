@@ -4,34 +4,36 @@ export interface Location {
 }
 
 export interface WeatherData {
-  temp: number;
+  temp: number | null;
   condition: string;
-  windSpeed: number;
-  humidity: number;
-  metar?: string;
+  windSpeed: number | null;
+  humidity: number | null;
+  observed?: string | null;
+  source?: string;
 }
 
-export interface TrafficData {
-  level: 'low' | 'moderate' | 'heavy' | 'critical';
-  incidents: number;
-  activeStatus: string;
-}
-
-export interface GlobePoint {
+export interface FlightData {
+  id?: string;
+  callsign: string;
   lat: number;
   lng: number;
-  size: number;
-  color: string;
-  label: string;
+  altitude?: number | null;
+  velocity?: number | null;
+  track?: number | null;
+  squawk?: string | null;
+  aircraft?: string | null;
+  registration?: string | null;
 }
 
-export interface TransportRoute {
+export interface CriticalEvent {
   id: string;
-  name: string;
-  color: string;
-  status: string;
-  delay: number;
-  path: [number, number, number][]; // [lat, lng, alt]
+  magnitude: number;
+  place: string;
+  time: number;
+  lat: number;
+  lng: number;
+  depth?: number;
+  url?: string;
 }
 
 export interface AppState {
@@ -40,7 +42,8 @@ export interface AppState {
   intelligenceReport: string | null;
   isLoading: boolean;
   weather: WeatherData | null;
-  traffic: TrafficData | null;
-  transportRoutes: TransportRoute[];
   layerIntensities: Record<string, number>;
+  surfaceViewActive: boolean;
+  liveFlights: FlightData[];
+  criticalEvents: CriticalEvent[];
 }
