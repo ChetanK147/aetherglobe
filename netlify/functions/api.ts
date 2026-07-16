@@ -1,16 +1,7 @@
+import type { Config, Context } from '@netlify/functions';
 import { handleApiRequest } from '../../lib/api';
 
-type NetlifyContext = {
-  ip?: string;
-};
-
-declare const Netlify: {
-  env: {
-    get(name: string): string | undefined;
-  };
-};
-
-export default async function api(request: Request, context: NetlifyContext) {
+export default async function api(request: Request, context: Context) {
   return handleApiRequest(
     request,
     {
@@ -21,7 +12,7 @@ export default async function api(request: Request, context: NetlifyContext) {
   );
 }
 
-export const config = {
+export const config: Config = {
   path: [
     '/api/intelligence',
     '/api/weather',
