@@ -18,9 +18,14 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run build
+      - name: Verify Netlify deployment files
+        run: |
+          test -f netlify.toml
+          test -f netlify/functions/api.ts
+          test -f lib/api.ts
       - name: Smoke test source-backed intelligence
         env:
-          GEMINI_API_KEY: ''
+          OPENAI_API_KEY: ''
         run: |
           npm run dev > /tmp/aetherglobe.log 2>&1 &
           SERVER_PID=$!
@@ -44,6 +49,7 @@ jobs:
             const health = JSON.parse(fs.readFileSync('/tmp/health.json', 'utf8'));
             const intelligence = JSON.parse(fs.readFileSync('/tmp/intelligence.json', 'utf8'));
             if (health.intelligenceMode !== 'local-source-summary') throw new Error('Unexpected health intelligence mode');
+            if (health.configuredModel !== 'gpt-5.6-terra') throw new Error('Unexpected default OpenAI model');
             if (intelligence.mode !== 'local-fallback') throw new Error('Fallback mode was not used');
             if (typeof intelligence.report !== 'string' || intelligence.report.length < 100) throw new Error('Intelligence report missing');
           "
