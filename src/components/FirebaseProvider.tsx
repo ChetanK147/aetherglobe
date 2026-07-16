@@ -1,12 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { initializeApp } from 'firebase/app';
-import { getAuth, onAuthStateChanged, User, signInWithPopup, GoogleAuthProvider, signOut } from 'firebase/auth';
-import { getFirestore, doc, setDoc } from 'firebase/firestore';
-import firebaseConfig from '../../firebase-applet-config.json';
-
-const app = initializeApp(firebaseConfig);
-export const auth = getAuth(app);
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+import { GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut, type User } from 'firebase/auth';
+import { doc, getDoc, serverTimestamp, setDoc } from 'firebase/firestore';
+import { auth, db } from '../services/firebase';
 
 interface AuthContextType {
   user: User | null;
@@ -19,54 +14,58 @@ const AuthContext = createContext<AuthContextType>({
   user: null,
   loading: true,
   login: async () => {},
-  logout: async () => {}
+  logout: async () => {},
 });
 
 export const useAuth = () => useContext(AuthContext);
+
+async function syncUserProfile(user: User) {
+  const userRef = doc(db, 'users', user.uid);
+  const existing = await getDoc(userRef);
+
+  if (existing.exists()) {
+    await setDoc(userRef, {
+      email: user.email,
+      displayName: user.displayName,
+      updatedAt: serverTimestamp(),
+    }, { merge: true });
+    return;
+  }
+
+  await setDoc(userRef, {
+    uid: user.uid,
+    email: user.email,
+    displayName: user.displayName,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+}
 
 export const FirebaseProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (currUser) => {
-      setUser(currUser);
+    return onAuthStateChanged(auth, async (currentUser) => {
+      setUser(currentUser);
       setLoading(false);
-      
-      // Upsert user standard data if logging in
-      if (currUser) {
+
+      if (currentUser) {
         try {
-          const userRef = doc(db, 'users', currUser.uid);
-          await setDoc(userRef, {
-            uid: currUser.uid,
-            email: currUser.email,
-            displayName: currUser.displayName,
-            updatedAt: Date.now(),
-            // Only set createdAt if we wanted to read it first, 
-            // but setDoc with merge handles updates. 
-            // We'll skip strict upsert here since rules demand exact schema.
-            // For safety, let's let Firestore rules handle the payload matching exactly.
-          }, { merge: true });
+          await syncUserProfile(currentUser);
         } catch (error) {
-          console.warn("Firestore rule might reject partial merge if keys don't match exactly. Skipping profile sync in free demo.");
+          console.warn('Unable to synchronize Firebase profile:', error);
         }
       }
     });
-    return unsubscribe;
   }, []);
 
   const login = async () => {
-    try {
-      const provider = new GoogleAuthProvider();
-      await signInWithPopup(auth, provider);
-    } catch (e) {
-      console.error("Login failed", e);
-    }
+    const provider = new GoogleAuthProvider();
+    await signInWithPopup(auth, provider);
   };
 
-  const logout = async () => {
-    await signOut(auth);
-  };
+  const logout = () => signOut(auth);
 
   return (
     <AuthContext.Provider value={{ user, loading, login, logout }}>
