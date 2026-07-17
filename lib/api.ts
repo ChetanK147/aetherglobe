@@ -2,8 +2,8 @@ import { LRUCache } from 'lru-cache';
 
 const REQUEST_TIMEOUT_MS = 12_000;
 const OPENAI_TIMEOUT_MS = 30_000;
-const DEFAULT_OPENAI_MODEL = 'gpt-5.6-terra';
-const FALLBACK_OPENAI_MODEL = 'gpt-5.6-luna';
+const DEFAULT_OPENAI_MODEL = 'gpt-5.2';
+const FALLBACK_OPENAI_MODEL = 'gpt-5-mini';
 const responseCache = new LRUCache<string, unknown>({ max: 500, ttl: 60_000 });
 const rateBuckets = new LRUCache<string, { count: number; resetAt: number }>({ max: 5_000, ttl: 60_000 });
 const intelligenceBuckets = new LRUCache<string, { count: number; resetAt: number }>({ max: 5_000, ttl: 60_000 });
@@ -34,11 +34,25 @@ interface Earthquake {
 }
 
 interface OpenAIResponse {
+  output_text?: string;
   output?: Array<{
     type?: string;
     content?: Array<{ type?: string; text?: string }>;
   }>;
   error?: { message?: string };
+}
+
+interface FlightRecord {
+  id: string;
+  callsign: string;
+  lat: number;
+  lng: number;
+  altitude: number | null;
+  velocity: number | null;
+  track: number | null;
+  squawk: string | number | null;
+  aircraft: string | null;
+  registration: string | null;
 }
 
 function consumeRateBucket(
@@ -56,7 +70,11 @@ function consumeRateBucket(
 }
 
 function parseCoordinate(value: unknown, min: number, max: number, name: string) {
-  const parsed = Number(value);
+  if (value === null || value === undefined || (typeof value === 'string' && value.trim() === '')) {
+    throw Object.assign(new Error(`Invalid ${name}`), { status: 400 });
+  }
+
+  const parsed = typeof value === 'number' ? value : Number(value);
   if (!Number.isFinite(parsed) || parsed < min || parsed > max) {
     throw Object.assign(new Error(`Invalid ${name}`), { status: 400 });
   }
@@ -119,6 +137,7 @@ async function getWeatherSnapshot(lat: number, lng: number): Promise<WeatherSnap
       time?: string;
     };
   };
+
   const result: WeatherSnapshot = {
     temp: data.current?.temperature_2m ?? null,
     humidity: data.current?.relative_humidity_2m ?? null,
@@ -140,23 +159,62 @@ async function getEarthquakes(): Promise<Earthquake[]> {
   if (!response.ok) throw Object.assign(new Error('USGS unavailable'), { status: 502 });
   const data = await response.json() as {
     features?: Array<{
-      id: string;
-      properties: { mag?: number; place?: string; time?: number; url?: string };
-      geometry: { coordinates: [number, number, number] };
+      id?: string;
+      properties?: { mag?: number; place?: string; time?: number; url?: string };
+      geometry?: { coordinates?: unknown[] };
     }>;
   };
-  const earthquakes = (data.features || []).slice(0, 100).map((feature) => ({
-    id: feature.id,
-    magnitude: feature.properties.mag ?? null,
-    place: feature.properties.place || 'Unknown location',
-    time: feature.properties.time || 0,
-    lat: feature.geometry.coordinates[1],
-    lng: feature.geometry.coordinates[0],
-    depth: feature.geometry.coordinates[2] ?? null,
-    url: feature.properties.url || '',
-  }));
+
+  const earthquakes = (data.features || []).flatMap((feature): Earthquake[] => {
+    const coordinates = feature.geometry?.coordinates;
+    const lng = Number(coordinates?.[0]);
+    const lat = Number(coordinates?.[1]);
+    const depth = Number(coordinates?.[2]);
+    if (!feature.id || !Number.isFinite(lat) || !Number.isFinite(lng)) return [];
+
+    return [{
+      id: feature.id,
+      magnitude: Number.isFinite(feature.properties?.mag) ? feature.properties?.mag ?? null : null,
+      place: feature.properties?.place || 'Unknown location',
+      time: Number.isFinite(feature.properties?.time) ? feature.properties?.time ?? 0 : 0,
+      lat,
+      lng,
+      depth: Number.isFinite(depth) ? depth : null,
+      url: feature.properties?.url || '',
+    }];
+  }).slice(0, 100);
+
   setCached(cacheKey, { earthquakes, source: 'usgs', timestamp: Date.now() }, 60_000);
   return earthquakes;
+}
+
+function toNullableNumber(value: unknown): number | null {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function toNullableString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function parseFlight(value: unknown): FlightRecord | null {
+  if (!Array.isArray(value)) return null;
+  const lat = Number(value[1]);
+  const lng = Number(value[2]);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+
+  return {
+    id: String(value[0] ?? `${lat}:${lng}`),
+    callsign: toNullableString(value[16]) || toNullableString(value[13]) || 'UNKNOWN',
+    lat,
+    lng,
+    altitude: toNullableNumber(value[4]),
+    velocity: toNullableNumber(value[5]),
+    track: toNullableNumber(value[3]),
+    squawk: typeof value[7] === 'string' || typeof value[7] === 'number' ? value[7] : null,
+    aircraft: toNullableString(value[8]),
+    registration: toNullableString(value[9]),
+  };
 }
 
 async function getFlights(searchParams: URLSearchParams) {
@@ -169,21 +227,7 @@ async function getFlights(searchParams: URLSearchParams) {
   const response = await fetchWithTimeout(url, { headers: { 'User-Agent': 'AetherGlobe/1.0' } });
   if (!response.ok) throw Object.assign(new Error('Flight provider unavailable'), { status: 502 });
   const data = await response.json() as Record<string, unknown>;
-  const flights = Object.values(data)
-    .filter(Array.isArray)
-    .map((flight: any[]) => ({
-      id: flight[0],
-      callsign: flight[16] || flight[13] || 'UNKNOWN',
-      lat: flight[1],
-      lng: flight[2],
-      altitude: flight[4] ?? null,
-      velocity: flight[5] ?? null,
-      track: flight[3] ?? null,
-      squawk: flight[7] ?? null,
-      aircraft: flight[8] ?? null,
-      registration: flight[9] ?? null,
-    }))
-    .filter((flight) => Number.isFinite(flight.lat) && Number.isFinite(flight.lng));
+  const flights = Object.values(data).map(parseFlight).filter((flight): flight is FlightRecord => flight !== null);
 
   const result = {
     flights,
@@ -238,6 +282,9 @@ function buildLocalIntelligence(
 }
 
 function extractOpenAIText(payload: OpenAIResponse) {
+  const topLevel = payload.output_text?.trim();
+  if (topLevel) return topLevel;
+
   return payload.output
     ?.filter((item) => item.type === 'message')
     .flatMap((item) => item.content || [])
@@ -351,7 +398,7 @@ async function generateIntelligence(body: Record<string, unknown>, env: RuntimeE
   const lng = parseCoordinate(body.lng, -180, 180, 'longitude');
   const context = typeof body.context === 'string' ? body.context.trim().slice(0, 1_200) : '';
   const useDeepThinking = body.useDeepThinking === true;
-  const cacheKey = `intelligence:${lat}:${lng}:${context}:${useDeepThinking}`;
+  const cacheKey = `intelligence:${lat.toFixed(4)}:${lng.toFixed(4)}:${context}:${useDeepThinking}`;
   const cached = getCached(cacheKey);
   if (cached) return cached;
 
