@@ -1,14 +1,21 @@
 import express, { type NextFunction, type Request, type Response } from 'express';
 import path from 'path';
+import { readFile } from 'fs/promises';
 import { createServer as createHttpServer } from 'http';
 import { createServer as createViteServer } from 'vite';
 import dotenv from 'dotenv';
 import { handleApiRequest } from './lib/api.ts';
+import { createExpressRateLimiter } from './lib/expressRateLimit.ts';
 
 dotenv.config({ path: '.env.local' });
 dotenv.config();
 
 const PORT = Number(process.env.PORT || 3000);
+const globalRateLimit = createExpressRateLimiter({
+  windowMs: 60_000,
+  limit: 300,
+  maxClients: 10_000,
+});
 
 function asyncRoute(handler: (req: Request, res: Response) => Promise<void>) {
   return (req: Request, res: Response, next: NextFunction) => {
@@ -30,6 +37,7 @@ async function startServer() {
   const httpServer = createHttpServer(app);
 
   app.disable('x-powered-by');
+  app.use(globalRateLimit);
   app.use(express.json({ limit: '32kb' }));
 
   app.all('/api/*', asyncRoute(async (req, res) => {
@@ -61,8 +69,9 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (_req, res) => res.sendFile(path.join(distPath, 'index.html')));
+    const indexHtml = await readFile(path.join(distPath, 'index.html'), 'utf8');
+    app.use(express.static(distPath, { index: false }));
+    app.get('*', (_req, res) => res.type('html').send(indexHtml));
   }
 
   app.use((error: Error & { status?: number }, _req: Request, res: Response, _next: NextFunction) => {
