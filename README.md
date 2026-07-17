@@ -40,10 +40,10 @@ AetherGlobe is an exploratory visualization. It is not suitable for aviation, em
 
    ```bash
    OPENAI_API_KEY=your_key_here
-   OPENAI_MODEL=gpt-5.6-terra
+   OPENAI_MODEL=gpt-5.2
    ```
 
-   When no OpenAI key is configured—or when OpenAI is unavailable—the intelligence endpoint still returns a coordinate summary built directly from Open-Meteo and USGS data. The API falls back from the configured model to `gpt-5.6-terra` and then `gpt-5.6-luna`.
+   When no OpenAI key is configured—or when OpenAI is unavailable—the intelligence endpoint still returns a coordinate summary built directly from Open-Meteo and USGS data. The API tries the configured model, then `gpt-5.2`, and finally `gpt-5-mini`.
 
 4. Start the app:
 
@@ -74,7 +74,7 @@ Set secrets in **Netlify → Site configuration → Environment variables** rath
 
 ```text
 OPENAI_API_KEY=your_key_here
-OPENAI_MODEL=gpt-5.6-terra
+OPENAI_MODEL=gpt-5.2
 ```
 
 The OpenAI key is optional. A deploy without it remains functional in local-source-summary mode. After the first deploy, add the generated Netlify domain to **Firebase Authentication → Settings → Authorized domains** if Google sign-in is enabled.
@@ -94,11 +94,11 @@ The in-memory cache and rate limiter are best-effort safeguards. They persist du
 `POST /api/intelligence` always returns a report for valid coordinates:
 
 1. Open-Meteo and USGS are queried for a verified local summary.
-2. When `OPENAI_API_KEY` is present, the API attempts the configured model, defaulting to `gpt-5.6-terra`.
-3. If that model fails, the API tries `gpt-5.6-luna`.
+2. When `OPENAI_API_KEY` is present, the API attempts the configured model, defaulting to `gpt-5.2`.
+3. If that model fails, the API tries `gpt-5-mini`.
 4. If OpenAI remains unavailable, the verified local summary is returned instead of an error.
 
-`GET /api/health` reports whether the runtime is using OpenAI-with-fallback or local-source-summary mode.
+`GET /api/health` reports whether the runtime is using OpenAI-with-fallback or local-source-summary mode, including the configured and fallback model names.
 
 ## Data sources
 
@@ -117,7 +117,8 @@ Pull requests run:
 ```bash
 npm ci
 npm run lint
+npm test
 npm run build
 ```
 
-The CI smoke test starts the local Express adapter without an OpenAI key, checks `/api/health`, and verifies that `/api/intelligence` returns a substantial local fallback report. Netlify Functions are included in the TypeScript validation through `.github/workflows/ci.yml`.
+The unit tests cover coordinate validation, legitimate zero coordinates, default model selection, model overrides and Responses API text parsing without calling live services. The CI smoke test also starts the local Express adapter without an OpenAI key, checks `/api/health`, and verifies that `/api/intelligence` returns a substantial local fallback report. Netlify Functions are included in the TypeScript validation through `.github/workflows/ci.yml`.

@@ -17,6 +17,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run lint
+      - run: npm test
       - run: npm run build
       - name: Verify Netlify deployment files
         run: |
@@ -49,7 +50,8 @@ jobs:
             const health = JSON.parse(fs.readFileSync('/tmp/health.json', 'utf8'));
             const intelligence = JSON.parse(fs.readFileSync('/tmp/intelligence.json', 'utf8'));
             if (health.intelligenceMode !== 'local-source-summary') throw new Error('Unexpected health intelligence mode');
-            if (health.configuredModel !== 'gpt-5.6-terra') throw new Error('Unexpected default OpenAI model');
+            if (health.configuredModel !== 'gpt-5.2') throw new Error('Unexpected default OpenAI model');
+            if (health.fallbackModel !== 'gpt-5-mini') throw new Error('Unexpected fallback OpenAI model');
             if (intelligence.mode !== 'local-fallback') throw new Error('Fallback mode was not used');
             if (typeof intelligence.report !== 'string' || intelligence.report.length < 100) throw new Error('Intelligence report missing');
           "
