@@ -58,6 +58,7 @@ async function fetchWeather(lat: number, lng: number): Promise<WeatherData | nul
 export default function App() {
   const [uiMode, setUiMode] = useState<UiMode>('vision');
   const [mobilePanel, setMobilePanel] = useState<MobilePanel>(null);
+  const [desktopPanels, setDesktopPanels] = useState({ intelligence: true, status: true });
   const [state, setState] = useState<AppState>({
     userLocation: null,
     selectedLocation: null,
@@ -187,9 +188,16 @@ export default function App() {
   };
 
   const primaryFlight = state.liveFlights[0];
+  const desktopGridColumns = desktopPanels.intelligence
+    ? desktopPanels.status
+      ? 'lg:grid-cols-[280px_minmax(0,1fr)_280px]'
+      : 'lg:grid-cols-[280px_minmax(0,1fr)_52px]'
+    : desktopPanels.status
+      ? 'lg:grid-cols-[52px_minmax(0,1fr)_280px]'
+      : 'lg:grid-cols-[52px_minmax(0,1fr)_52px]';
 
   return (
-    <div className="relative h-[100dvh] min-h-[100dvh] w-full overflow-hidden bg-bg selection:bg-accent/30 lg:grid lg:grid-cols-[280px_minmax(0,1fr)_280px] lg:grid-rows-[60px_minmax(0,1fr)_100px] lg:gap-2.5 lg:p-5">
+    <div className={`relative h-[100dvh] min-h-[100dvh] w-full overflow-hidden bg-bg selection:bg-accent/30 lg:grid ${desktopGridColumns} lg:grid-rows-[60px_minmax(0,1fr)_100px] lg:gap-2.5 lg:p-5 lg:transition-[grid-template-columns] lg:duration-300`}>
       <div className="absolute inset-0 pointer-events-none z-0">
         <Suspense fallback={<div className="text-accent flex h-full w-full items-center justify-center px-6 text-center font-mono animate-pulse">Establishing orbital link...</div>}>
           <AtmosphericGlobe
@@ -211,6 +219,8 @@ export default function App() {
         eventCount={state.criticalEvents.length}
         mobileOpen={mobilePanel === 'status'}
         onMobileClose={() => setMobilePanel(null)}
+        desktopOpen={desktopPanels.status}
+        onDesktopToggle={() => setDesktopPanels((previous) => ({ ...previous, status: !previous.status }))}
         onGeolocate={requestGeolocation}
         onCoordinateSubmit={handleLocationSelect}
         onToggleSurface={state.selectedLocation ? toggleSurfaceMap : undefined}
@@ -235,6 +245,8 @@ export default function App() {
           layerIntensities={state.layerIntensities}
           mobileOpen={mobilePanel === 'intelligence'}
           onMobileClose={() => setMobilePanel(null)}
+          desktopOpen={desktopPanels.intelligence}
+          onDesktopToggle={() => setDesktopPanels((previous) => ({ ...previous, intelligence: !previous.intelligence }))}
           onIntensityChange={handleIntensityChange}
           onAsk={(prompt, useDeepThinking) => {
             if (state.selectedLocation) {
