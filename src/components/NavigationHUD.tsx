@@ -1,5 +1,5 @@
 import React from 'react';
-import { Activity, Cloud, LogIn, LogOut, Map as MapIcon, MapPin, Navigation, Plane, Radio, Waves, X } from 'lucide-react';
+import { Activity, ChevronDown, ChevronLeft, ChevronRight, Cloud, LogIn, LogOut, Map as MapIcon, MapPin, Navigation, Plane, Radio, Waves, X } from 'lucide-react';
 import { motion } from 'motion/react';
 import type { Location, WeatherData } from '../types';
 import { useAuth } from './FirebaseProvider';
@@ -12,13 +12,39 @@ interface NavigationHUDProps {
   eventCount: number;
   mobileOpen?: boolean;
   onMobileClose?: () => void;
+  desktopOpen?: boolean;
+  onDesktopToggle?: () => void;
   onGeolocate?: () => void;
   onCoordinateSubmit?: (lat: number, lng: number) => void;
   onToggleSurface?: () => void;
 }
 
+interface SectionHeadingProps {
+  id: string;
+  title: string;
+  open: boolean;
+  onToggle: () => void;
+  showMobile?: boolean;
+}
+
 const formatValue = (value: number | null, suffix: string) =>
   value === null ? 'Unavailable' : `${Math.round(value)}${suffix}`;
+
+const SectionHeading: React.FC<SectionHeadingProps> = ({ id, title, open, onToggle, showMobile = true }) => (
+  <>
+    {showMobile && <div className="panel-title lg:hidden">{title}</div>}
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-expanded={open}
+      aria-controls={id}
+      className="panel-title mb-0 hidden w-full items-center justify-between rounded px-1 py-2 text-left transition hover:bg-white/5 lg:flex"
+    >
+      <span>{title}</span>
+      <ChevronDown size={15} className={`transition-transform duration-200 ${open ? 'rotate-180' : ''}`} />
+    </button>
+  </>
+);
 
 const NavigationHUD: React.FC<NavigationHUDProps> = ({
   location,
@@ -28,6 +54,8 @@ const NavigationHUD: React.FC<NavigationHUDProps> = ({
   eventCount,
   mobileOpen = false,
   onMobileClose,
+  desktopOpen = true,
+  onDesktopToggle,
   onGeolocate,
   onCoordinateSubmit,
   onToggleSurface,
@@ -36,6 +64,10 @@ const NavigationHUD: React.FC<NavigationHUDProps> = ({
   const [manualLng, setManualLng] = React.useState(selectedCoord?.lng.toFixed(4) || '');
   const [coordinateError, setCoordinateError] = React.useState('');
   const [clock, setClock] = React.useState(() => new Date());
+  const [locationOpen, setLocationOpen] = React.useState(true);
+  const [weatherOpen, setWeatherOpen] = React.useState(true);
+  const [feedsOpen, setFeedsOpen] = React.useState(true);
+  const [searchOpen, setSearchOpen] = React.useState(true);
   const { user, login, logout, loading } = useAuth();
 
   React.useEffect(() => {
@@ -100,7 +132,17 @@ const NavigationHUD: React.FC<NavigationHUDProps> = ({
       </header>
 
       <aside className={`${mobileOpen ? 'flex' : 'hidden'} fixed inset-x-3 bottom-20 top-28 z-[70] flex-col gap-2.5 lg:static lg:col-start-3 lg:row-start-2 lg:flex`}>
-        <motion.div initial={{ x: 50, opacity: 0 }} animate={{ x: 0, opacity: 1 }} className="glass-panel flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto rounded-xl p-4 custom-scrollbar lg:rounded-none">
+        <button
+          type="button"
+          onClick={onDesktopToggle}
+          aria-label="Expand status panel"
+          className={`hidden h-full w-full flex-col items-center justify-center gap-4 border border-accent/20 bg-black/45 text-accent transition hover:bg-accent/10 ${desktopOpen ? 'lg:hidden' : 'lg:flex'}`}
+        >
+          <ChevronLeft size={18} />
+          <span className="text-[0.58rem] font-black uppercase tracking-[0.22em] [writing-mode:vertical-rl]">Status</span>
+        </button>
+
+        <motion.div initial={{ x: 50, opacity: 0 }} animate={{ x: 0, opacity: 1 }} className={`glass-panel min-h-0 flex-1 flex-col gap-4 overflow-y-auto rounded-xl p-4 custom-scrollbar lg:rounded-none ${desktopOpen ? 'flex' : 'flex lg:hidden'}`}>
           <div className="flex items-center justify-between lg:hidden">
             <div className="panel-title mb-0 flex-1">Status and sources</div>
             <button type="button" onClick={onMobileClose} aria-label="Close status panel" className="ml-3 flex min-h-10 min-w-10 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-accent">
@@ -108,45 +150,63 @@ const NavigationHUD: React.FC<NavigationHUDProps> = ({
             </button>
           </div>
 
-          <div className="panel-title hidden lg:block">Selected Location</div>
+          <div className="hidden items-center justify-between lg:flex">
+            <div className="panel-title mb-0">Status and sources</div>
+            {onDesktopToggle && (
+              <button
+                type="button"
+                onClick={onDesktopToggle}
+                aria-label="Collapse status panel"
+                className="flex min-h-9 min-w-9 items-center justify-center rounded border border-accent/20 bg-black/35 text-accent transition hover:bg-accent/10"
+              >
+                <ChevronRight size={17} />
+              </button>
+            )}
+          </div>
+
           <div className="space-y-3 text-[0.75rem]">
-            <div className="flex items-center justify-between gap-2">
-              <span className="flex items-center gap-2"><MapPin size={13} className="text-accent" />{location ? 'Current position' : 'Manual target'}</span>
-              {onGeolocate && (
-                <button type="button" onClick={onGeolocate} className="min-h-9 rounded border border-accent/40 bg-accent/10 px-3 text-[0.65rem] text-accent hover:bg-accent/20">
-                  <Navigation size={11} className="mr-1 inline" />Locate
-                </button>
+            <SectionHeading id="selected-location-content" title="Selected Location" open={locationOpen} onToggle={() => setLocationOpen((current) => !current)} showMobile={false} />
+            <div id="selected-location-content" className={`space-y-3 ${locationOpen ? '' : 'lg:hidden'}`}>
+              <div className="flex items-center justify-between gap-2">
+                <span className="flex items-center gap-2"><MapPin size={13} className="text-accent" />{location ? 'Current position' : 'Manual target'}</span>
+                {onGeolocate && (
+                  <button type="button" onClick={onGeolocate} className="min-h-9 rounded border border-accent/40 bg-accent/10 px-3 text-[0.65rem] text-accent hover:bg-accent/20">
+                    <Navigation size={11} className="mr-1 inline" />Locate
+                  </button>
+                )}
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div className="border border-white/5 bg-black/30 p-2.5">
+                  <div className="text-[0.55rem] uppercase opacity-50">Latitude</div>
+                  <div className="font-mono text-accent">{selectedCoord?.lat.toFixed(4) ?? '—'}</div>
+                </div>
+                <div className="border border-white/5 bg-black/30 p-2.5">
+                  <div className="text-[0.55rem] uppercase opacity-50">Longitude</div>
+                  <div className="font-mono text-accent">{selectedCoord?.lng.toFixed(4) ?? '—'}</div>
+                </div>
+              </div>
+            </div>
+
+            <SectionHeading id="current-weather-content" title="Current Weather" open={weatherOpen} onToggle={() => setWeatherOpen((current) => !current)} />
+            <div id="current-weather-content" className={weatherOpen ? '' : 'lg:hidden'}>
+              {weather ? (
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="bg-black/30 p-2.5"><Cloud size={12} className="mb-1 text-accent" /><strong>{weather.condition}</strong></div>
+                  <div className="bg-black/30 p-2.5"><span className="opacity-50">Temp</span><div>{formatValue(weather.temp, '°C')}</div></div>
+                  <div className="bg-black/30 p-2.5"><Waves size={12} className="mb-1 text-accent" /><div>{formatValue(weather.windSpeed, ' km/h')}</div></div>
+                  <div className="bg-black/30 p-2.5"><span className="opacity-50">Humidity</span><div>{formatValue(weather.humidity, '%')}</div></div>
+                  <div className="col-span-2 font-mono text-[0.6rem] opacity-50">
+                    Source: {weather.source || 'Open-Meteo'}{weather.observed ? ` · observed ${weather.observed}` : ''}
+                  </div>
+                </div>
+              ) : (
+                <div className="text-[0.65rem] opacity-50">Weather is currently unavailable.</div>
               )}
             </div>
 
-            <div className="grid grid-cols-2 gap-2">
-              <div className="border border-white/5 bg-black/30 p-2.5">
-                <div className="text-[0.55rem] uppercase opacity-50">Latitude</div>
-                <div className="font-mono text-accent">{selectedCoord?.lat.toFixed(4) ?? '—'}</div>
-              </div>
-              <div className="border border-white/5 bg-black/30 p-2.5">
-                <div className="text-[0.55rem] uppercase opacity-50">Longitude</div>
-                <div className="font-mono text-accent">{selectedCoord?.lng.toFixed(4) ?? '—'}</div>
-              </div>
-            </div>
-
-            <div className="panel-title mt-4">Current Weather</div>
-            {weather ? (
-              <div className="grid grid-cols-2 gap-2">
-                <div className="bg-black/30 p-2.5"><Cloud size={12} className="mb-1 text-accent" /><strong>{weather.condition}</strong></div>
-                <div className="bg-black/30 p-2.5"><span className="opacity-50">Temp</span><div>{formatValue(weather.temp, '°C')}</div></div>
-                <div className="bg-black/30 p-2.5"><Waves size={12} className="mb-1 text-accent" /><div>{formatValue(weather.windSpeed, ' km/h')}</div></div>
-                <div className="bg-black/30 p-2.5"><span className="opacity-50">Humidity</span><div>{formatValue(weather.humidity, '%')}</div></div>
-                <div className="col-span-2 font-mono text-[0.6rem] opacity-50">
-                  Source: {weather.source || 'Open-Meteo'}{weather.observed ? ` · observed ${weather.observed}` : ''}
-                </div>
-              </div>
-            ) : (
-              <div className="text-[0.65rem] opacity-50">Weather is currently unavailable.</div>
-            )}
-
-            <div className="panel-title mt-4">Verified Feeds</div>
-            <div className="space-y-2">
+            <SectionHeading id="verified-feeds-content" title="Verified Feeds" open={feedsOpen} onToggle={() => setFeedsOpen((current) => !current)} />
+            <div id="verified-feeds-content" className={`space-y-2 ${feedsOpen ? '' : 'lg:hidden'}`}>
               <div className="flex justify-between border-l-2 border-accent bg-black/30 p-2.5">
                 <span className="flex items-center gap-2"><Plane size={12} />Aircraft in sector</span><strong>{flightCount}</strong>
               </div>
@@ -160,9 +220,9 @@ const NavigationHUD: React.FC<NavigationHUDProps> = ({
           </div>
         </motion.div>
 
-        <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="glass-panel rounded-xl border-r-2 border-r-accent p-4 lg:rounded-none">
-          <div className="panel-title">Coordinate Search</div>
-          <form onSubmit={handleCoordinateSubmit} className="mt-2 grid grid-cols-2 gap-2 lg:flex lg:flex-col">
+        <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className={`glass-panel rounded-xl border-r-2 border-r-accent p-4 lg:rounded-none ${desktopOpen ? '' : 'lg:hidden'}`}>
+          <SectionHeading id="coordinate-search-content" title="Coordinate Search" open={searchOpen} onToggle={() => setSearchOpen((current) => !current)} />
+          <form id="coordinate-search-content" onSubmit={handleCoordinateSubmit} className={`mt-2 grid grid-cols-2 gap-2 lg:flex lg:flex-col ${searchOpen ? '' : 'lg:hidden'}`}>
             <input type="number" min="-90" max="90" step="any" value={manualLat} onChange={(event) => setManualLat(event.target.value)} className="min-h-10 bg-black/60 px-2 font-mono text-[0.8rem] text-accent outline-none border border-accent/20 focus:border-accent" placeholder="Latitude" />
             <input type="number" min="-180" max="180" step="any" value={manualLng} onChange={(event) => setManualLng(event.target.value)} className="min-h-10 bg-black/60 px-2 font-mono text-[0.8rem] text-accent outline-none border border-accent/20 focus:border-accent" placeholder="Longitude" />
             {coordinateError && <div className="col-span-2 text-[0.6rem] text-danger">{coordinateError}</div>}
