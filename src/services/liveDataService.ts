@@ -1,4 +1,4 @@
-import type { CriticalEvent, FlightData } from '../types';
+import type { CriticalEvent, FlightData, VesselData } from '../types';
 
 async function readJson<T>(response: Response): Promise<T> {
   if (!response.ok) {
@@ -8,6 +8,15 @@ async function readJson<T>(response: Response): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+function boundsParams(minLat: number, minLng: number, maxLat: number, maxLng: number) {
+  return new URLSearchParams({
+    lamin: String(minLat),
+    lomin: String(minLng),
+    lamax: String(maxLat),
+    lomax: String(maxLng),
+  });
+}
+
 export async function getLiveFlights(
   minLat: number,
   minLng: number,
@@ -15,16 +24,29 @@ export async function getLiveFlights(
   maxLng: number,
 ): Promise<FlightData[]> {
   try {
-    const params = new URLSearchParams({
-      lamin: String(minLat),
-      lomin: String(minLng),
-      lamax: String(maxLat),
-      lomax: String(maxLng),
-    });
-    const data = await readJson<{ flights: FlightData[] }>(await fetch(`/api/flights?${params}`));
+    const data = await readJson<{ flights: FlightData[] }>(
+      await fetch(`/api/flights?${boundsParams(minLat, minLng, maxLat, maxLng)}`),
+    );
     return data.flights || [];
   } catch (error) {
     console.warn('Could not fetch live flights:', error);
+    return [];
+  }
+}
+
+export async function getLiveVessels(
+  minLat: number,
+  minLng: number,
+  maxLat: number,
+  maxLng: number,
+): Promise<VesselData[]> {
+  try {
+    const data = await readJson<{ vessels: VesselData[] }>(
+      await fetch(`/api/vessels?${boundsParams(minLat, minLng, maxLat, maxLng)}`),
+    );
+    return data.vessels || [];
+  } catch (error) {
+    console.warn('Could not fetch AISstream vessels:', error);
     return [];
   }
 }
