@@ -3,6 +3,7 @@ import { Activity, ChevronDown, ChevronLeft, ChevronRight, Cloud, LogIn, LogOut,
 import { motion } from 'motion/react';
 import type { Location, WeatherData } from '../types';
 import { useAuth } from './FirebaseProvider';
+import FlightLookup from './FlightLookup';
 
 interface NavigationHUDProps {
   location: Location | null;
@@ -214,9 +215,11 @@ const NavigationHUD: React.FC<NavigationHUDProps> = ({
                 <span className="flex items-center gap-2"><Activity size={12} />USGS M4.5+ events</span><strong>{eventCount}</strong>
               </div>
               <div className="text-[0.58rem] leading-relaxed opacity-45">
-                Flight data uses an unofficial public feed and can be delayed or unavailable. Do not use AetherGlobe for operational decisions.
+                Aircraft use the local dump1090 receiver when configured, with an unofficial public fallback. Do not use AetherGlobe for operational decisions.
               </div>
             </div>
+
+            <FlightLookup />
           </div>
         </motion.div>
 
@@ -238,7 +241,7 @@ const NavigationHUD: React.FC<NavigationHUDProps> = ({
 
       <footer className="hidden lg:col-start-1 lg:col-end-4 lg:row-start-3 lg:grid lg:grid-cols-[220px_1fr_220px] lg:items-center lg:border-t lg:border-accent-dim lg:px-5 lg:text-[0.65rem] lg:font-mono glass-panel z-20">
         <div className="flex items-center gap-3 text-accent"><Radio size={16} /><div><strong>LIVE DATA</strong><div className="opacity-50">30-second refresh</div></div></div>
-        <div className="text-center opacity-55">OPEN-METEO · USGS · PUBLIC FLIGHT FEED · OPENAI SERVER PROXY</div>
+        <div className="text-center opacity-55">OPEN-METEO · USGS · LOCAL ADS-B / PUBLIC FALLBACK · AVIATIONSTACK LOOKUP · OPENAI</div>
         <div className="text-right"><div>AI GENERATED ANALYSIS</div><div className="opacity-50">Verify important claims</div></div>
       </footer>
     </>
