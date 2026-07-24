@@ -13,29 +13,29 @@ function jsonResponse(payload: unknown, status = 200) {
   });
 }
 
-test('health reports supported default and fallback models', async () => {
-  const response = await handleApiRequest(
+test('health reports direct source aggregation and maritime runtime status', async () => {
+  const defaultResponse = await handleApiRequest(
     new Request('http://localhost/api/health'),
     {},
     'test-health-defaults',
   );
-  const body = await readJson(response);
+  const defaultBody = await readJson(defaultResponse);
 
-  assert.equal(response.status, 200);
-  assert.equal(body.configuredModel, 'gpt-5.2');
-  assert.equal(body.fallbackModel, 'gpt-5-mini');
-});
+  assert.equal(defaultResponse.status, 200);
+  assert.equal(defaultBody.intelligenceMode, 'direct-source-brief');
+  assert.equal(defaultBody.aisstreamConfigured, false);
+  assert.equal(defaultBody.aisstreamMode, 'disabled');
 
-test('health preserves a valid configured model override', async () => {
-  const response = await handleApiRequest(
+  const configuredResponse = await handleApiRequest(
     new Request('http://localhost/api/health'),
-    { OPENAI_MODEL: 'gpt-5.1' },
-    'test-health-override',
+    { AISSTREAM_API_KEY: 'test-key', AISSTREAM_RUNTIME: 'persistent' },
+    'test-health-aisstream',
   );
-  const body = await readJson(response);
+  const configuredBody = await readJson(configuredResponse);
 
-  assert.equal(response.status, 200);
-  assert.equal(body.configuredModel, 'gpt-5.1');
+  assert.equal(configuredResponse.status, 200);
+  assert.equal(configuredBody.aisstreamConfigured, true);
+  assert.equal(configuredBody.aisstreamMode, 'persistent-websocket');
 });
 
 test('coordinate endpoints reject missing or empty values', async (t) => {
@@ -75,12 +75,24 @@ test('coordinate endpoints reject missing or empty values', async (t) => {
     assert.equal(body.error, 'Invalid lomin');
   });
 
-  await t.test('intelligence rejects a missing coordinate', async () => {
+  await t.test('vessels reject an incomplete bounding box', async () => {
+    const response = await handleApiRequest(
+      new Request('http://localhost/api/vessels?lamin=10&lamax=20'),
+      {},
+      'test-vessels-missing',
+    );
+    const body = await readJson(response);
+
+    assert.equal(response.status, 400);
+    assert.equal(body.error, 'Invalid lomin');
+  });
+
+  await t.test('source brief rejects a missing coordinate', async () => {
     const response = await handleApiRequest(
       new Request('http://localhost/api/intelligence', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ lng: 73.7898, context: 'Missing latitude' }),
+        body: JSON.stringify({ lng: 73.7898 }),
       }),
       {},
       'test-intelligence-missing',
@@ -92,26 +104,47 @@ test('coordinate endpoints reject missing or empty values', async (t) => {
   });
 });
 
-test('valid zero coordinates and OpenAI enrichment remain supported', async () => {
+test('valid zero coordinates return a direct current source brief', async () => {
   const originalFetch = globalThis.fetch;
-  const requestedModels: string[] = [];
+  const requestedUrls: string[] = [];
 
-  globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+  globalThis.fetch = async (input: RequestInfo | URL) => {
     const url = typeof input === 'string'
       ? input
       : input instanceof URL
         ? input.toString()
         : input.url;
+    requestedUrls.push(url);
 
-    if (url.startsWith('https://api.open-meteo.com/')) {
+    if (url.startsWith('https://api.open-meteo.com/v1/forecast')) {
       return jsonResponse({
         current: {
           temperature_2m: 25,
           relative_humidity_2m: 70,
           weather_code: 1,
           wind_speed_10m: 8,
-          time: '2026-07-17T12:00',
+          time: '2026-07-25T12:00',
         },
+      });
+    }
+
+    if (url.startsWith('https://air-quality-api.open-meteo.com/v1/air-quality')) {
+      return jsonResponse({
+        current: {
+          us_aqi: 42,
+          pm2_5: 8.5,
+          pm10: 14.2,
+          nitrogen_dioxide: 4.2,
+          ozone: 61.1,
+          time: '2026-07-25T12:00',
+        },
+      });
+    }
+
+    if (url.startsWith('https://nominatim.openstreetmap.org/reverse')) {
+      return jsonResponse({
+        display_name: 'Gulf of Guinea',
+        address: { country: 'International waters' },
       });
     }
 
@@ -119,48 +152,50 @@ test('valid zero coordinates and OpenAI enrichment remain supported', async () =
       return jsonResponse({ features: [] });
     }
 
-    if (url === 'https://api.openai.com/v1/responses') {
-      const requestBody = JSON.parse(String(init?.body || '{}')) as { model?: string };
-      requestedModels.push(requestBody.model || '');
-      return jsonResponse({ output_text: 'Enriched location summary.' });
-    }
-
     throw new Error(`Unexpected test request: ${url}`);
   };
 
   try {
-    const localResponse = await handleApiRequest(
+    const response = await handleApiRequest(
       new Request('http://localhost/api/intelligence', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ lat: 0, lng: 0, context: 'Zero coordinate check' }),
+        body: JSON.stringify({ lat: 0, lng: 0 }),
       }),
       {},
       'test-zero-coordinate',
     );
-    const localBody = await readJson(localResponse);
+    const body = await readJson(response);
 
-    assert.equal(localResponse.status, 200);
-    assert.equal(localBody.mode, 'local-fallback');
-    assert.match(String(localBody.report), /0\.0000, 0\.0000/);
-
-    const enrichedResponse = await handleApiRequest(
-      new Request('http://localhost/api/intelligence', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ lat: 19.9975, lng: 73.7898, context: 'OpenAI response parsing check' }),
-      }),
-      { OPENAI_API_KEY: 'test-key' },
-      'test-openai-output-text',
-    );
-    const enrichedBody = await readJson(enrichedResponse);
-
-    assert.equal(enrichedResponse.status, 200);
-    assert.equal(enrichedBody.mode, 'openai-enriched');
-    assert.equal(enrichedBody.model, 'gpt-5.2');
-    assert.match(String(enrichedBody.report), /Enriched location summary/);
-    assert.deepEqual(requestedModels, ['gpt-5.2']);
+    assert.equal(response.status, 200);
+    assert.equal(body.mode, 'direct-source-brief');
+    assert.equal(body.model, null);
+    assert.match(String(body.report), /0\.0000, 0\.0000/);
+    assert.match(String(body.report), /Gulf of Guinea/);
+    assert.match(String(body.report), /US AQI: 42/);
+    assert.match(String(body.report), /no language model/i);
+    assert.ok(requestedUrls.some((url) => url.includes('nominatim.openstreetmap.org')));
+    assert.ok(requestedUrls.some((url) => url.includes('air-quality-api.open-meteo.com')));
+    assert.ok(!requestedUrls.some((url) => url.includes('api.openai.com')));
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test('serverless maritime endpoint explains that a persistent relay is required', async () => {
+  const response = await handleApiRequest(
+    new Request('http://localhost/api/vessels?lamin=10&lamax=20&lomin=70&lomax=80'),
+    {
+      AISSTREAM_API_KEY: 'test-key',
+      AISSTREAM_RUNTIME: 'serverless',
+    },
+    'test-aisstream-serverless',
+  );
+  const body = await readJson(response);
+
+  assert.equal(response.status, 200);
+  assert.equal(body.connection, 'relay-required');
+  assert.equal(body.configured, true);
+  assert.deepEqual(body.vessels, []);
+  assert.match(String(body.warning), /persistent backend WebSocket or relay/i);
 });
