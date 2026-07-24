@@ -365,7 +365,7 @@ export async function lookupAviationstackFlight(value: string | null, env: Fligh
   if (!apiKey) {
     throw Object.assign(
       new Error('Aviationstack is not configured. Add AVIATIONSTACK_API_KEY to .env.local and restart the server.'),
-      { status: 503 },
+      { status: 503, expose: true },
     );
   }
 
@@ -378,7 +378,8 @@ export async function lookupAviationstackFlight(value: string | null, env: Fligh
     'AVIATIONSTACK_BASE_URL',
     true,
   );
-  const url = new URL('flights', baseUrl.toString().endsWith('/') ? baseUrl : `${baseUrl.toString()}/`);
+  const base = baseUrl.toString().endsWith('/') ? baseUrl.toString() : `${baseUrl.toString()}/`;
+  const url = new URL('flights', base);
   url.searchParams.set('access_key', apiKey);
   url.searchParams.set(filter, query);
   url.searchParams.set('limit', '10');
@@ -388,7 +389,7 @@ export async function lookupAviationstackFlight(value: string | null, env: Fligh
   if (!response.ok || payload.error) {
     const status = payload.error ? aviationstackErrorStatus(payload.error) : 502;
     const message = payload.error?.message || payload.error?.info || `Aviationstack returned ${response.status}`;
-    throw Object.assign(new Error(message), { status });
+    throw Object.assign(new Error(message), { status, expose: status === 503 });
   }
 
   const result = {
