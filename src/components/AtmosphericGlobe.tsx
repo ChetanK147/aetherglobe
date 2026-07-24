@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import Globe from 'react-globe.gl';
 import * as THREE from 'three';
-import type { CriticalEvent, FlightData, Location } from '../types';
+import type { CriticalEvent, FlightData, Location, VesselData } from '../types';
 
 interface AtmosphericGlobeProps {
   onLocationSelect?: (lat: number, lng: number) => void;
@@ -9,8 +9,13 @@ interface AtmosphericGlobeProps {
   targetLocation?: Location | null;
   layerIntensities: Record<string, number>;
   liveFlights?: FlightData[];
+  liveVessels?: VesselData[];
   criticalEvents?: CriticalEvent[];
 }
+
+type TrafficPoint =
+  | (FlightData & { kind: 'flight' })
+  | (VesselData & { kind: 'vessel' });
 
 const AtmosphericGlobe: React.FC<AtmosphericGlobeProps> = ({
   onLocationSelect,
@@ -18,6 +23,7 @@ const AtmosphericGlobe: React.FC<AtmosphericGlobeProps> = ({
   targetLocation,
   layerIntensities,
   liveFlights = [],
+  liveVessels = [],
   criticalEvents = [],
 }) => {
   const globeRef = useRef<any>(null);
@@ -68,7 +74,6 @@ const AtmosphericGlobe: React.FC<AtmosphericGlobeProps> = ({
         cloudTexture.dispose();
         return;
       }
-
       const geometry = new THREE.SphereGeometry(globeRef.current.getGlobeRadius() * 1.005, 64, 64);
       const material = new THREE.MeshPhongMaterial({
         map: cloudTexture,
@@ -111,15 +116,27 @@ const AtmosphericGlobe: React.FC<AtmosphericGlobeProps> = ({
   };
 
   const flightIntensity = layerIntensities['Global Air Traffic'] ?? 0;
+  const vesselIntensity = layerIntensities['Maritime Traffic'] ?? 0;
   const seismicIntensity = layerIntensities['Seismic Activity'] ?? 0;
   const flights = flightIntensity > 0 ? liveFlights : [];
+  const vessels = vesselIntensity > 0 ? liveVessels : [];
   const events = seismicIntensity > 0 ? criticalEvents : [];
+  const trafficPoints: TrafficPoint[] = [
+    ...flights.map((flight) => ({ ...flight, kind: 'flight' as const })),
+    ...vessels.map((vessel) => ({ ...vessel, kind: 'vessel' as const })),
+  ];
   const labels = [
     ...flights.map((flight) => ({
       lat: flight.lat,
       lng: flight.lng,
       text: `✈ ${flight.callsign}`,
       color: `rgba(0, 243, 255, ${flightIntensity})`,
+    })),
+    ...vessels.map((vessel) => ({
+      lat: vessel.lat,
+      lng: vessel.lng,
+      text: `◆ ${vessel.name}`,
+      color: `rgba(45, 212, 191, ${vesselIntensity})`,
     })),
     ...events.map((event) => ({
       lat: event.lat,
@@ -139,17 +156,28 @@ const AtmosphericGlobe: React.FC<AtmosphericGlobeProps> = ({
         globeImageUrl="//unpkg.com/three-globe/example/img/earth-night.jpg"
         bumpImageUrl="//unpkg.com/three-globe/example/img/earth-topology.png"
         backgroundImageUrl="//unpkg.com/three-globe/example/img/night-sky.png"
-        pointsData={flights}
+        pointsData={trafficPoints}
         pointLat="lat"
         pointLng="lng"
-        pointAltitude={(flight: object) => {
-          const altitude = Number((flight as FlightData).altitude || 0);
+        pointAltitude={(point: object) => {
+          const item = point as TrafficPoint;
+          if (item.kind === 'vessel') return 0.012;
+          const altitude = Number(item.altitude || 0);
           return 0.02 + Math.min(0.15, altitude / 300_000);
         }}
-        pointRadius={0.18}
-        pointColor={() => `rgba(0, 243, 255, ${flightIntensity})`}
-        pointLabel={(flight: object) => {
-          const item = flight as FlightData;
+        pointRadius={(point: object) => (point as TrafficPoint).kind === 'vessel' ? 0.14 : 0.18}
+        pointColor={(point: object) => {
+          const item = point as TrafficPoint;
+          return item.kind === 'vessel'
+            ? `rgba(45, 212, 191, ${vesselIntensity})`
+            : `rgba(0, 243, 255, ${flightIntensity})`;
+        }}
+        pointLabel={(point: object) => {
+          const item = point as TrafficPoint;
+          if (item.kind === 'vessel') {
+            const speed = item.speedKnots === null ? '' : ` · ${item.speedKnots.toFixed(1)} kn`;
+            return `${item.name} · MMSI ${item.mmsi}${speed}`;
+          }
           return `${item.callsign}${item.altitude ? ` · ${Math.round(item.altitude)} ft` : ''}`;
         }}
         ringsData={[
