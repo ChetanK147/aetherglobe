@@ -60,6 +60,8 @@ async function startServer() {
         DUMP1090_MAX_POSITION_AGE_SECONDS: process.env.DUMP1090_MAX_POSITION_AGE_SECONDS,
         AVIATIONSTACK_API_KEY: process.env.AVIATIONSTACK_API_KEY,
         AVIATIONSTACK_BASE_URL: process.env.AVIATIONSTACK_BASE_URL,
+        AVIATIONSTACK_TRAFFIC_CACHE_SECONDS: process.env.AVIATIONSTACK_TRAFFIC_CACHE_SECONDS,
+        AVIATIONSTACK_MAX_LIVE_AGE_SECONDS: process.env.AVIATIONSTACK_MAX_LIVE_AGE_SECONDS,
       },
       req.ip || req.socket.remoteAddress || 'unknown',
     );
