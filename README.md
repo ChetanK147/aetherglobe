@@ -1,29 +1,44 @@
 # AetherGlobe
 
-AetherGlobe is a cinematic 3D globe for exploring location context with clearly identified data sources.
+AetherGlobe is a cinematic 3D globe for exploring current location context with clearly identified public data sources.
 
 ## Current capabilities
 
 - Interactive Three.js globe and coordinate selection
-- Current weather from Open-Meteo
+- Current place name from OpenStreetMap Nominatim
+- Current weather and air quality from Open-Meteo
 - M4.5+ earthquake events from USGS
 - Nearby aircraft from a local dump1090 receiver when configured
-- Automatic fallback to the existing unofficial public aircraft feed when the local receiver is unavailable
-- On-demand Aviationstack flight-number lookup for airline, route, schedule, aircraft and available live fields
-- Source-backed location intelligence that works without an AI key
-- Optional OpenAI enrichment through the shared server-side API
+- On-demand Aviationstack commercial-flight lookup
+- Live maritime positions from AISstream in the persistent local Express runtime
+- Direct source brief with no OpenAI or other language-model dependency
 - Local Express development and Netlify Functions deployment
 - Optional Google sign-in through Firebase
 - OpenStreetMap/CARTO surface map
 
+The former Tactical and Cinematic display buttons were removed because they only activated decorative overlays and did not provide separate operational tools.
+
 AetherGlobe is an exploratory visualization. It is not suitable for aviation, emergency, traffic, military, maritime or other operational decisions.
+
+## Why the source brief does not scrape arbitrary sites
+
+The source brief uses structured public endpoints instead of scraping miscellaneous webpages. This is more reliable, easier to attribute, and less likely to break when a website changes its layout.
+
+For each selected coordinate, the backend directly aggregates:
+
+- OpenStreetMap Nominatim reverse geocoding
+- Open-Meteo current weather
+- Open-Meteo current air quality
+- USGS M4.5+ one-day earthquake GeoJSON
+
+No language model is used to rewrite or interpret the data.
 
 ## Requirements
 
-- Node.js 20 or newer
-- An Aviationstack API key only when flight-number lookup is desired
-- An OpenAI API key only when AI-enriched reports are desired
-- A configured Firebase web project when authentication is required
+- Node.js 22.4 or newer for the native server-side WebSocket used by AISstream
+- An AISstream API key for maritime traffic
+- An Aviationstack API key only when commercial flight lookup is desired
+- A configured Firebase web project only when authentication is required
 
 ## Local setup
 
@@ -39,34 +54,26 @@ AetherGlobe is an exploratory visualization. It is not suitable for aviation, em
    cp .env.example .env.local
    ```
 
-3. Open `.env.local` and replace this placeholder:
+3. Add your AISstream key to `.env.local`:
 
    ```text
-   AVIATIONSTACK_API_KEY=PASTE_YOUR_AVIATIONSTACK_KEY_HERE
+   AISSTREAM_API_KEY=your_real_aisstream_key
+   AISSTREAM_URL=wss://stream.aisstream.io/v0/stream
+   AISSTREAM_MAX_POSITION_AGE_SECONDS=300
    ```
 
-   with your real key:
-
-   ```text
-   AVIATIONSTACK_API_KEY=your_real_aviationstack_key
-   ```
-
-   Do not add quotes, do not use a `VITE_` prefix, and do not commit `.env.local`. The repository already ignores `.env.local`.
-
-4. Keep or adjust the local receiver URL:
+4. Keep or adjust the local ADS-B receiver URL:
 
    ```text
    DUMP1090_AIRCRAFT_URL=http://192.168.0.168/dump1090/data/aircraft.json
    DUMP1090_MAX_POSITION_AGE_SECONDS=20
    ```
 
-   This private address works only when the Express server is running on a Mac or another device connected to the same network as the receiver. ADS-B Radar can continue reading the receiver at the same time.
-
-5. Optionally add a server-only OpenAI key:
+5. Optionally add Aviationstack:
 
    ```text
-   OPENAI_API_KEY=your_key_here
-   OPENAI_MODEL=gpt-5.2
+   AVIATIONSTACK_API_KEY=your_real_aviationstack_key
+   AVIATIONSTACK_BASE_URL=https://api.aviationstack.com/v1
    ```
 
 6. Start AetherGlobe:
@@ -75,81 +82,71 @@ AetherGlobe is an exploratory visualization. It is not suitable for aviation, em
    npm run dev
    ```
 
-The local Express server runs on `http://localhost:3000` by default. Restart it after changing `.env.local`.
+Open `http://localhost:3000`. Restart the server after changing `.env.local`.
 
-## Using flight lookup
+Never put service keys in a `VITE_` variable, React component, screenshot, or committed file.
 
-Open the **Status and sources** panel, expand **Flight Lookup**, enter a code such as `AI123` or `AIC123`, and press search.
+## AISstream behavior
 
-Aviationstack is called only when a lookup is submitted. Results are cached for 15 minutes so repeated searches do not repeatedly consume API quota. It is not used as the high-frequency radar-position source.
+AISstream is consumed only on the backend through:
 
-The local dump1090 receiver remains the preferred source for aircraft positions inside its reception area. If it cannot be reached, AetherGlobe falls back to the existing unofficial public feed and clearly labels that limitation.
+```text
+wss://stream.aisstream.io/v0/stream
+```
+
+When a location is selected, the local Express server subscribes to a bounding box approximately three degrees around that point. The server keeps one WebSocket connection open, safely updates the subscription when the selected region changes, normalizes vessel positions, and exposes the current in-memory snapshot through:
+
+```text
+GET /api/vessels?lamin=...&lamax=...&lomin=...&lomax=...
+```
+
+The browser never receives the AISstream key and never connects to AISstream directly.
+
+The globe displays only recent position reports. Static ship messages are used to enrich an already observed vessel with fields such as name, type, and destination when available.
+
+### Public Netlify limitation
+
+Netlify Functions are serverless and are not treated as a persistent AISstream collector. On Netlify, `/api/vessels` returns a clear `relay-required` status rather than repeatedly opening short-lived upstream WebSockets.
+
+To show AISstream traffic continuously on the public website, deploy a small always-on relay on a persistent Node host, Raspberry Pi, VPS, Fly.io, Render, or similar service. The relay should keep the AISstream connection open and publish normalized snapshots to a shared database or authenticated endpoint consumed by Netlify.
+
+## Flight data
+
+The local dump1090 receiver remains the preferred source for aircraft positions. Aviationstack is used only for deliberate flight-number lookups from the Status panel. The existing public aircraft fallback remains non-authoritative and must not be used operationally.
 
 ## API endpoints
 
-The shared Express/Netlify API serves:
-
-- `POST /api/intelligence`
+- `POST /api/intelligence` — direct current source brief
 - `GET /api/weather`
 - `GET /api/flights`
+- `GET /api/vessels`
 - `GET /api/flight-lookup?flight=AI123`
 - `GET /api/live/usgs`
 - `GET /api/health`
 
-`GET /api/health` reports whether the local receiver and Aviationstack are configured without exposing either URL credentials or API keys.
-
-## Netlify deployment
-
-Use these Netlify settings when linking the GitHub repository:
-
-- Build command: `npm run build`
-- Publish directory: `dist`
-- Functions directory: `netlify/functions`
-- Node version: 20
-
-Add secrets under **Netlify → Site configuration → Environment variables**:
-
-```text
-AVIATIONSTACK_API_KEY=your_real_aviationstack_key
-AVIATIONSTACK_BASE_URL=https://api.aviationstack.com/v1
-OPENAI_API_KEY=your_optional_openai_key
-OPENAI_MODEL=gpt-5.2
-```
-
-Do not add `DUMP1090_AIRCRAFT_URL=http://192.168.0.168/...` to Netlify expecting it to work. A Netlify Function cannot reach a private address on your home network. The public deployment can use Aviationstack lookup, while publishing your local receiver data requires a separate outbound authenticated bridge.
-
-For a test deployment, use a Netlify Deploy Preview before publishing to production.
-
-## Security model
-
-All service keys are read only by `server.ts` or the Netlify Function runtime. Never expose them with a `VITE_` prefix or inject them through `vite.config.ts`, because Vite variables are delivered to the browser.
-
-`.env.local` is ignored by Git. `.env.example` contains placeholders only.
-
-The Aviationstack endpoint validates flight codes, rate-limits lookups, caps upstream result count and caches successful responses. The in-memory cache and rate limiter are best-effort safeguards for a warm runtime; they are not a globally shared production quota.
-
-Firebase web configuration is stored in `firebase-applet-config.json`. Firebase API keys identify the project but do not replace Firestore rules, authorized domains or authentication controls.
-
-## Intelligence behavior
-
-`POST /api/intelligence` always returns a report for valid coordinates:
-
-1. Open-Meteo and USGS are queried for a verified local summary.
-2. When `OPENAI_API_KEY` is present, the API attempts the configured model, defaulting to `gpt-5.2`.
-3. If that model fails, the API tries `gpt-5-mini`.
-4. If OpenAI remains unavailable, the verified local summary is returned instead of an error.
+`GET /api/health` reports whether ADS-B, Aviationstack, and AISstream are configured without exposing keys.
 
 ## Data sources
 
 | Feature | Source | Notes |
 |---|---|---|
+| Place name | OpenStreetMap Nominatim | Cached reverse-geocoding result |
 | Weather | Open-Meteo | Current coordinate-based observation |
+| Air quality | Open-Meteo Air Quality | Current AQI and pollutant readings |
 | Earthquakes | USGS | M4.5+ events from the past day |
-| Aircraft positions | Local dump1090 receiver | Preferred locally; limited by antenna coverage and receiver availability |
-| Aircraft fallback | Unofficial public FlightRadar24 feed | Used only when dump1090 is not configured or cannot be reached |
-| Flight lookup | Aviationstack | On-demand commercial flight details; fields may be missing |
-| Intelligence | Open-Meteo + USGS, optionally OpenAI | Local source summary always remains available |
-| Surface map | OpenStreetMap and CARTO | Basemap only; no live incidents or routing |
+| Aircraft positions | Local dump1090 receiver | Preferred locally; limited by receiver coverage |
+| Commercial flight lookup | Aviationstack | On demand; fields can be absent |
+| Vessel positions | AISstream | Persistent backend WebSocket; beta service |
+| Surface map | OpenStreetMap and CARTO | Basemap only |
+
+## Security model
+
+- `.env.local` is ignored by Git.
+- `.env.example` contains placeholders only.
+- AISstream and Aviationstack keys are read only by server code.
+- The AISstream subscription is sent within the backend WebSocket connection.
+- API responses are rate-limited and do not include credentials.
+- Firebase project identifiers do not replace authentication controls or Firestore rules.
 
 ## Validation
 
@@ -162,4 +159,4 @@ npm test
 npm run build
 ```
 
-Unit tests cover coordinate validation, legitimate zero coordinates, model selection, Aviationstack key handling and response normalization, lookup caching, and dump1090 position filtering without calling live services.
+Tests cover coordinate validation, direct source aggregation, zero coordinates, AISstream serverless behavior, persistent WebSocket subscription formatting, vessel normalization, Aviationstack lookup, and dump1090 position filtering without using real credentials.
