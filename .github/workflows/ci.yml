@@ -19,6 +19,12 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Verify optional environment setup
+        run: |
+          test ! -f .env.local
+          npm run setup:env
+          test -f .env.local
+          rm .env.local
       - run: npm run lint
       - run: npm test
       - run: npm run build
@@ -28,8 +34,9 @@ jobs:
           test -f netlify/functions/api.ts
           test -f lib/api.ts
           test -f lib/aisStreamHub.ts
-      - name: Smoke test direct source brief
+      - name: Smoke test without an environment file
         run: |
+          test ! -f .env.local
           npm run dev > /tmp/aetherglobe.log 2>&1 &
           SERVER_PID=$!
           trap 'kill "$SERVER_PID" 2>/dev/null || true' EXIT
@@ -52,6 +59,9 @@ jobs:
             const health = JSON.parse(fs.readFileSync('/tmp/health.json', 'utf8'));
             const intelligence = JSON.parse(fs.readFileSync('/tmp/intelligence.json', 'utf8'));
             if (health.intelligenceMode !== 'direct-source-brief') throw new Error('Unexpected source brief mode');
+            if (health.localReceiverConfigured !== false) throw new Error('Local receiver should be optional');
+            if (health.aviationstackConfigured !== false) throw new Error('Aviationstack should be optional');
+            if (health.aisstreamConfigured !== false) throw new Error('AISstream should be optional');
             if (intelligence.mode !== 'direct-source-brief') throw new Error('Direct source brief was not used');
             if (intelligence.model !== null) throw new Error('A language model should not be configured');
             if (typeof intelligence.report !== 'string' || intelligence.report.length < 100) throw new Error('Source brief missing');
