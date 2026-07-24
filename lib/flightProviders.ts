@@ -288,14 +288,14 @@ async function getDump1090Flights(bounds: FlightBounds, env: FlightProviderEnv) 
 
 function normalizeAviationstackTrafficFlight(
   flight: AviationstackFlight,
-  bounds: FlightBounds,
+  bounds: FlightBounds | null,
   fetchedAt: number,
   maxLiveAgeSeconds: number,
 ): NormalizedFlight | null {
   const live = flight.live;
   const lat = toNullableNumber(live?.latitude);
   const lng = toNullableNumber(live?.longitude);
-  if (lat === null || lng === null || !isInsideBounds(lat, lng, bounds)) return null;
+  if (lat === null || lng === null || (bounds && !isInsideBounds(lat, lng, bounds))) return null;
 
   const observedAt = parseDateMs(live?.updated);
   const positionAgeSeconds = observedAt === null
@@ -350,16 +350,16 @@ async function fetchAviationstackTrafficSnapshot(env: FlightProviderEnv): Promis
     DEFAULT_AVIATIONSTACK_TRAFFIC_CACHE_SECONDS,
     86_400,
   );
-  const cacheKey = 'aviationstack-traffic:active:100';
-  const cached = flightCache.get(cacheKey) as AviationstackTrafficSnapshot | undefined;
-  if (cached) return cached;
-
   const baseUrl = parseHttpUrl(
     env.AVIATIONSTACK_BASE_URL?.trim() || 'https://api.aviationstack.com/v1',
     'AVIATIONSTACK_BASE_URL',
     true,
   );
   const base = baseUrl.toString().endsWith('/') ? baseUrl.toString() : `${baseUrl.toString()}/`;
+  const cacheKey = `aviationstack-traffic:${base}:active:100`;
+  const cached = flightCache.get(cacheKey) as AviationstackTrafficSnapshot | undefined;
+  if (cached) return cached;
+
   const url = new URL('flights', base);
   url.searchParams.set('access_key', apiKey);
   url.searchParams.set('flight_status', 'active');
@@ -386,6 +386,7 @@ async function getAviationstackTraffic(
   bounds: FlightBounds,
   env: FlightProviderEnv,
   localFailure: string,
+  scope: 'regional' | 'global',
 ) {
   const snapshot = await fetchAviationstackTrafficSnapshot(env);
   if (!snapshot) return null;
@@ -398,7 +399,7 @@ async function getAviationstackTraffic(
   const flights = snapshot.data
     .map((flight) => normalizeAviationstackTrafficFlight(
       flight,
-      bounds,
+      scope === 'regional' ? bounds : null,
       snapshot.fetchedAt,
       maxLiveAgeSeconds,
     ))
@@ -411,7 +412,10 @@ async function getAviationstackTraffic(
     sampled: true,
     upstreamCount: snapshot.pagination?.count ?? snapshot.data.length,
     upstreamTotal: snapshot.pagination?.total ?? null,
-    warning: `Local dump1090 receiver unavailable: ${localFailure}. Aviationstack fallback shows only active records with valid live positions from a capped 100-record response. Positions can be delayed, incomplete, or absent and must not be used operationally.`,
+    scope,
+    warning: scope === 'regional'
+      ? `Local dump1090 receiver unavailable: ${localFailure}. Aviationstack fallback shows only active records with valid live positions inside the selected bounds from a capped 100-record response. Positions can be delayed, incomplete, or absent and must not be used operationally.`
+      : `Local dump1090 receiver is not available in this runtime. Aviationstack is showing a global sample of active records with valid live positions from a capped 100-record response. It is not complete radar coverage and must not be used operationally.`,
   };
 }
 
@@ -471,7 +475,7 @@ export async function getFlightsForBounds(bounds: FlightBounds, env: FlightProvi
       console.warn('Local dump1090 receiver unavailable:', localMessage);
 
       try {
-        const aviationstackResult = await getAviationstackTraffic(bounds, env, localMessage);
+        const aviationstackResult = await getAviationstackTraffic(bounds, env, localMessage, 'regional');
         if (aviationstackResult && aviationstackResult.flights.length > 0) {
           return aviationstackResult;
         }
@@ -494,6 +498,34 @@ export async function getFlightsForBounds(bounds: FlightBounds, env: FlightProvi
       }
     }
   }
+
+  if (configuredSecret(env.AVIATIONSTACK_API_KEY)) {
+    try {
+      const aviationstackResult = await getAviationstackTraffic(
+        bounds,
+        env,
+        'Local dump1090 receiver is not configured for this runtime',
+        'global',
+      );
+      if (aviationstackResult && aviationstackResult.flights.length > 0) {
+        return aviationstackResult;
+      }
+      return getFlightradar24Flights(
+        bounds,
+        'Aviationstack returned no usable live positions in its sampled active-flight response.',
+      );
+    } catch (aviationstackError) {
+      const aviationstackMessage = aviationstackError instanceof Error
+        ? aviationstackError.message
+        : String(aviationstackError);
+      console.warn('Aviationstack traffic source unavailable:', aviationstackMessage);
+      return getFlightradar24Flights(
+        bounds,
+        `Aviationstack traffic source unavailable: ${aviationstackMessage}.`,
+      );
+    }
+  }
+
   return getFlightradar24Flights(bounds);
 }
 
@@ -580,6 +612,8 @@ export function getFlightProviderStatus(env: FlightProviderEnv) {
       ? aviationstackConfigured
         ? 'local-dump1090-with-aviationstack-fallback'
         : 'local-dump1090-with-public-fallback'
-      : 'flightradar24-unofficial',
+      : aviationstackConfigured
+        ? 'aviationstack-live-with-public-fallback'
+        : 'flightradar24-unofficial',
   };
 }
