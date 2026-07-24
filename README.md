@@ -8,7 +8,8 @@ AetherGlobe is a cinematic 3D globe for exploring location context with clearly 
 - Current weather from Open-Meteo
 - M4.5+ earthquake events from USGS
 - Nearby aircraft from a local dump1090 receiver when configured
-- Automatic fallback to the existing unofficial public aircraft feed when the local receiver is unavailable
+- Sampled Aviationstack live-position fallback when the configured receiver cannot be reached
+- Automatic fallback to the existing unofficial public aircraft feed when neither local nor Aviationstack live positions are usable
 - On-demand Aviationstack flight-number lookup for airline, route, schedule, aircraft and available live fields
 - Source-backed location intelligence that works without an AI key
 - Optional OpenAI enrichment through the shared server-side API
@@ -21,7 +22,7 @@ AetherGlobe is an exploratory visualization. It is not suitable for aviation, em
 ## Requirements
 
 - Node.js 20 or newer
-- An Aviationstack API key only when flight-number lookup is desired
+- An Aviationstack API key when flight-number lookup or Aviationstack traffic fallback is desired
 - An OpenAI API key only when AI-enriched reports are desired
 - A configured Firebase web project when authentication is required
 
@@ -53,14 +54,17 @@ AetherGlobe is an exploratory visualization. It is not suitable for aviation, em
 
    Do not add quotes, do not use a `VITE_` prefix, and do not commit `.env.local`. The repository already ignores `.env.local`.
 
-4. Keep or adjust the local receiver URL:
+4. Keep or adjust the local receiver and fallback settings:
 
    ```text
    DUMP1090_AIRCRAFT_URL=http://192.168.0.168/dump1090/data/aircraft.json
    DUMP1090_MAX_POSITION_AGE_SECONDS=20
+
+   AVIATIONSTACK_TRAFFIC_CACHE_SECONDS=900
+   AVIATIONSTACK_MAX_LIVE_AGE_SECONDS=1800
    ```
 
-   This private address works only when the Express server is running on a Mac or another device connected to the same network as the receiver. ADS-B Radar can continue reading the receiver at the same time.
+   This private receiver address works only when the Express server is running on a Mac or another device connected to the same network. ADS-B Radar can continue reading the receiver at the same time.
 
 5. Optionally add a server-only OpenAI key:
 
@@ -77,13 +81,25 @@ AetherGlobe is an exploratory visualization. It is not suitable for aviation, em
 
 The local Express server runs on `http://localhost:3000` by default. Restart it after changing `.env.local`.
 
+## Aircraft source order
+
+`GET /api/flights` uses this order when a local receiver URL is configured:
+
+1. Read fresh positions directly from dump1090.
+2. If dump1090 cannot be reached, request active flights from Aviationstack.
+3. Keep only Aviationstack records that contain usable live latitude and longitude inside the requested bounds.
+4. Convert Aviationstack altitude from metres to feet and horizontal speed from kilometres per hour to knots so the existing globe can consume the same normalized structure.
+5. If Aviationstack is unavailable or supplies no usable live positions, use the existing unofficial public feed as the final fallback.
+
+The Aviationstack fallback is deliberately labelled as sampled. It requests a maximum of 100 active records, and many commercial-flight records can omit live position fields. It is not equivalent to a complete regional ADS-B radar feed.
+
+Successful Aviationstack traffic responses are cached for the configured interval. The default is 15 minutes. This is suitable for occasional prototype outages, but a continuously unavailable receiver can consume API quota quickly. Increase the cache interval or use a plan with enough requests before relying on the fallback continuously.
+
 ## Using flight lookup
 
 Open the **Status and sources** panel, expand **Flight Lookup**, enter a code such as `AI123` or `AIC123`, and press search.
 
-Aviationstack is called only when a lookup is submitted. Results are cached for 15 minutes so repeated searches do not repeatedly consume API quota. It is not used as the high-frequency radar-position source.
-
-The local dump1090 receiver remains the preferred source for aircraft positions inside its reception area. If it cannot be reached, AetherGlobe falls back to the existing unofficial public feed and clearly labels that limitation.
+On-demand lookup results are cached for 15 minutes so repeated searches do not repeatedly consume API quota.
 
 ## API endpoints
 
@@ -112,11 +128,13 @@ Add secrets under **Netlify → Site configuration → Environment variables**:
 ```text
 AVIATIONSTACK_API_KEY=your_real_aviationstack_key
 AVIATIONSTACK_BASE_URL=https://api.aviationstack.com/v1
+AVIATIONSTACK_TRAFFIC_CACHE_SECONDS=900
+AVIATIONSTACK_MAX_LIVE_AGE_SECONDS=1800
 OPENAI_API_KEY=your_optional_openai_key
 OPENAI_MODEL=gpt-5.2
 ```
 
-Do not add `DUMP1090_AIRCRAFT_URL=http://192.168.0.168/...` to Netlify expecting it to work. A Netlify Function cannot reach a private address on your home network. The public deployment can use Aviationstack lookup, while publishing your local receiver data requires a separate outbound authenticated bridge.
+A Netlify Function cannot directly reach a private `192.168.x.x` receiver. Publishing your local receiver observations still requires a separate outbound authenticated bridge. The Aviationstack key can continue powering on-demand lookup on Netlify, while the local receiver fallback described above applies when the runtime is actually configured to attempt that receiver URL.
 
 For a test deployment, use a Netlify Deploy Preview before publishing to production.
 
@@ -126,7 +144,7 @@ All service keys are read only by `server.ts` or the Netlify Function runtime. N
 
 `.env.local` is ignored by Git. `.env.example` contains placeholders only.
 
-The Aviationstack endpoint validates flight codes, rate-limits lookups, caps upstream result count and caches successful responses. The in-memory cache and rate limiter are best-effort safeguards for a warm runtime; they are not a globally shared production quota.
+The Aviationstack endpoints validate input, cap upstream result counts, and cache successful responses. The in-memory cache and rate limiter are best-effort safeguards for a warm runtime; they are not a globally shared production quota.
 
 Firebase web configuration is stored in `firebase-applet-config.json`. Firebase API keys identify the project but do not replace Firestore rules, authorized domains or authentication controls.
 
@@ -146,7 +164,8 @@ Firebase web configuration is stored in `firebase-applet-config.json`. Firebase 
 | Weather | Open-Meteo | Current coordinate-based observation |
 | Earthquakes | USGS | M4.5+ events from the past day |
 | Aircraft positions | Local dump1090 receiver | Preferred locally; limited by antenna coverage and receiver availability |
-| Aircraft fallback | Unofficial public FlightRadar24 feed | Used only when dump1090 is not configured or cannot be reached |
+| Aircraft fallback | Aviationstack active flights | Sampled and cached; only records with live positions are plotted |
+| Final aircraft fallback | Unofficial public FlightRadar24 feed | Used when local and Aviationstack sources are unusable |
 | Flight lookup | Aviationstack | On-demand commercial flight details; fields may be missing |
 | Intelligence | Open-Meteo + USGS, optionally OpenAI | Local source summary always remains available |
 | Surface map | OpenStreetMap and CARTO | Basemap only; no live incidents or routing |
@@ -162,4 +181,4 @@ npm test
 npm run build
 ```
 
-Unit tests cover coordinate validation, legitimate zero coordinates, model selection, Aviationstack key handling and response normalization, lookup caching, and dump1090 position filtering without calling live services.
+Unit tests cover coordinate validation, legitimate zero coordinates, model selection, Aviationstack key handling and response normalization, lookup caching, dump1090 position filtering, and Aviationstack live-position fallback without calling live services.
