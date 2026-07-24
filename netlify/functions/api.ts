@@ -11,6 +11,8 @@ export default async function api(request: Request, context: Context) {
       DUMP1090_MAX_POSITION_AGE_SECONDS: Netlify.env.get('DUMP1090_MAX_POSITION_AGE_SECONDS'),
       AVIATIONSTACK_API_KEY: Netlify.env.get('AVIATIONSTACK_API_KEY'),
       AVIATIONSTACK_BASE_URL: Netlify.env.get('AVIATIONSTACK_BASE_URL'),
+      AVIATIONSTACK_TRAFFIC_CACHE_SECONDS: Netlify.env.get('AVIATIONSTACK_TRAFFIC_CACHE_SECONDS'),
+      AVIATIONSTACK_MAX_LIVE_AGE_SECONDS: Netlify.env.get('AVIATIONSTACK_MAX_LIVE_AGE_SECONDS'),
     },
     context.ip || request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown',
   );
