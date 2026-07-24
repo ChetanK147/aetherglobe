@@ -109,14 +109,15 @@ test('valid zero coordinates return a direct current source brief', async () => 
   const requestedUrls: string[] = [];
 
   globalThis.fetch = async (input: RequestInfo | URL) => {
-    const url = typeof input === 'string'
+    const rawUrl = typeof input === 'string'
       ? input
       : input instanceof URL
         ? input.toString()
         : input.url;
-    requestedUrls.push(url);
+    const requestedUrl = new URL(rawUrl);
+    requestedUrls.push(requestedUrl.toString());
 
-    if (url.startsWith('https://api.open-meteo.com/v1/forecast')) {
+    if (requestedUrl.hostname === 'api.open-meteo.com' && requestedUrl.pathname === '/v1/forecast') {
       return jsonResponse({
         current: {
           temperature_2m: 25,
@@ -128,7 +129,7 @@ test('valid zero coordinates return a direct current source brief', async () => 
       });
     }
 
-    if (url.startsWith('https://air-quality-api.open-meteo.com/v1/air-quality')) {
+    if (requestedUrl.hostname === 'air-quality-api.open-meteo.com' && requestedUrl.pathname === '/v1/air-quality') {
       return jsonResponse({
         current: {
           us_aqi: 42,
@@ -141,18 +142,18 @@ test('valid zero coordinates return a direct current source brief', async () => 
       });
     }
 
-    if (url.startsWith('https://nominatim.openstreetmap.org/reverse')) {
+    if (requestedUrl.hostname === 'nominatim.openstreetmap.org' && requestedUrl.pathname === '/reverse') {
       return jsonResponse({
         display_name: 'Gulf of Guinea',
         address: { country: 'International waters' },
       });
     }
 
-    if (url.startsWith('https://earthquake.usgs.gov/')) {
+    if (requestedUrl.hostname === 'earthquake.usgs.gov') {
       return jsonResponse({ features: [] });
     }
 
-    throw new Error(`Unexpected test request: ${url}`);
+    throw new Error(`Unexpected test request: ${requestedUrl}`);
   };
 
   try {
@@ -166,6 +167,7 @@ test('valid zero coordinates return a direct current source brief', async () => 
       'test-zero-coordinate',
     );
     const body = await readJson(response);
+    const requestedHosts = requestedUrls.map((url) => new URL(url).hostname);
 
     assert.equal(response.status, 200);
     assert.equal(body.mode, 'direct-source-brief');
@@ -174,9 +176,9 @@ test('valid zero coordinates return a direct current source brief', async () => 
     assert.match(String(body.report), /Gulf of Guinea/);
     assert.match(String(body.report), /US AQI: 42/);
     assert.match(String(body.report), /no language model/i);
-    assert.ok(requestedUrls.some((url) => url.includes('nominatim.openstreetmap.org')));
-    assert.ok(requestedUrls.some((url) => url.includes('air-quality-api.open-meteo.com')));
-    assert.ok(!requestedUrls.some((url) => url.includes('api.openai.com')));
+    assert.ok(requestedHosts.includes('nominatim.openstreetmap.org'));
+    assert.ok(requestedHosts.includes('air-quality-api.open-meteo.com'));
+    assert.ok(!requestedHosts.includes('api.openai.com'));
   } finally {
     globalThis.fetch = originalFetch;
   }
