@@ -5,20 +5,19 @@ import {
   lookupAviationstackFlight,
   type FlightProviderEnv,
 } from './flightProviders.ts';
+import {
+  getAisStreamSnapshot,
+  getAisStreamStatus,
+  type AisStreamEnv,
+} from './aisStreamHub.ts';
 
 const REQUEST_TIMEOUT_MS = 12_000;
-const OPENAI_TIMEOUT_MS = 30_000;
-const DEFAULT_OPENAI_MODEL = 'gpt-5.2';
-const FALLBACK_OPENAI_MODEL = 'gpt-5-mini';
 const responseCache = new LRUCache<string, unknown>({ max: 500, ttl: 60_000 });
 const rateBuckets = new LRUCache<string, { count: number; resetAt: number }>({ max: 5_000, ttl: 60_000 });
 const intelligenceBuckets = new LRUCache<string, { count: number; resetAt: number }>({ max: 5_000, ttl: 60_000 });
 const flightLookupBuckets = new LRUCache<string, { count: number; resetAt: number }>({ max: 5_000, ttl: 60_000 });
 
-export interface RuntimeEnv extends FlightProviderEnv {
-  OPENAI_API_KEY?: string;
-  OPENAI_MODEL?: string;
-}
+export interface RuntimeEnv extends FlightProviderEnv, AisStreamEnv {}
 
 interface WeatherSnapshot {
   temp: number | null;
@@ -27,6 +26,25 @@ interface WeatherSnapshot {
   weatherCode: number | null;
   observed: string | null;
   source: 'open-meteo';
+}
+
+interface AirQualitySnapshot {
+  usAqi: number | null;
+  pm25: number | null;
+  pm10: number | null;
+  nitrogenDioxide: number | null;
+  ozone: number | null;
+  observed: string | null;
+  source: 'open-meteo-air-quality';
+}
+
+interface PlaceSnapshot {
+  displayName: string | null;
+  locality: string | null;
+  region: string | null;
+  country: string | null;
+  countryCode: string | null;
+  source: 'openstreetmap-nominatim';
 }
 
 interface Earthquake {
@@ -38,15 +56,6 @@ interface Earthquake {
   lng: number;
   depth: number | null;
   url: string;
-}
-
-interface OpenAIResponse {
-  output_text?: string;
-  output?: Array<{
-    type?: string;
-    content?: Array<{ type?: string; text?: string }>;
-  }>;
-  error?: { message?: string };
 }
 
 type RestrictedRequest = 'intelligence' | 'flight-lookup' | null;
@@ -86,11 +95,6 @@ function parseBounds(searchParams: URLSearchParams) {
     throw Object.assign(new Error('Invalid bounding box order'), { status: 400 });
   }
   return { lamin, lamax, lomin, lomax };
-}
-
-function normalizeOpenAIModel(value: string | undefined) {
-  const model = value?.trim();
-  return model && /^[a-z0-9][a-z0-9._:-]{0,100}$/i.test(model) ? model : undefined;
 }
 
 async function fetchWithTimeout(url: string, init: RequestInit = {}, timeoutMs = REQUEST_TIMEOUT_MS) {
@@ -146,6 +150,95 @@ async function getWeatherSnapshot(lat: number, lng: number): Promise<WeatherSnap
   return result;
 }
 
+async function getAirQualitySnapshot(lat: number, lng: number): Promise<AirQualitySnapshot> {
+  const cacheKey = `air-quality:${lat.toFixed(3)}:${lng.toFixed(3)}`;
+  const cached = getCached<AirQualitySnapshot>(cacheKey);
+  if (cached) return cached;
+
+  const url = new URL('https://air-quality-api.open-meteo.com/v1/air-quality');
+  url.searchParams.set('latitude', String(lat));
+  url.searchParams.set('longitude', String(lng));
+  url.searchParams.set('current', 'us_aqi,pm2_5,pm10,nitrogen_dioxide,ozone');
+  url.searchParams.set('timezone', 'auto');
+
+  const response = await fetchWithTimeout(url.toString());
+  if (!response.ok) throw Object.assign(new Error('Air-quality provider unavailable'), { status: 502 });
+  const data = await response.json() as {
+    current?: {
+      us_aqi?: number;
+      pm2_5?: number;
+      pm10?: number;
+      nitrogen_dioxide?: number;
+      ozone?: number;
+      time?: string;
+    };
+  };
+
+  const result: AirQualitySnapshot = {
+    usAqi: data.current?.us_aqi ?? null,
+    pm25: data.current?.pm2_5 ?? null,
+    pm10: data.current?.pm10 ?? null,
+    nitrogenDioxide: data.current?.nitrogen_dioxide ?? null,
+    ozone: data.current?.ozone ?? null,
+    observed: data.current?.time ?? null,
+    source: 'open-meteo-air-quality',
+  };
+  setCached(cacheKey, result, 10 * 60_000);
+  return result;
+}
+
+async function getPlaceSnapshot(lat: number, lng: number): Promise<PlaceSnapshot> {
+  const cacheKey = `place:${lat.toFixed(3)}:${lng.toFixed(3)}`;
+  const cached = getCached<PlaceSnapshot>(cacheKey);
+  if (cached) return cached;
+
+  const url = new URL('https://nominatim.openstreetmap.org/reverse');
+  url.searchParams.set('format', 'jsonv2');
+  url.searchParams.set('lat', String(lat));
+  url.searchParams.set('lon', String(lng));
+  url.searchParams.set('zoom', '10');
+  url.searchParams.set('addressdetails', '1');
+
+  const response = await fetchWithTimeout(url.toString(), {
+    headers: {
+      Accept: 'application/json',
+      'Accept-Language': 'en',
+      'User-Agent': 'AetherGlobe/4.4 (https://github.com/ChetanK147/aetherglobe)',
+    },
+  });
+  if (!response.ok) throw Object.assign(new Error('OpenStreetMap place lookup unavailable'), { status: 502 });
+  const data = await response.json() as {
+    display_name?: string;
+    address?: {
+      city?: string;
+      town?: string;
+      village?: string;
+      municipality?: string;
+      county?: string;
+      state?: string;
+      region?: string;
+      country?: string;
+      country_code?: string;
+    };
+  };
+
+  const result: PlaceSnapshot = {
+    displayName: data.display_name ?? null,
+    locality: data.address?.city
+      ?? data.address?.town
+      ?? data.address?.village
+      ?? data.address?.municipality
+      ?? data.address?.county
+      ?? null,
+    region: data.address?.state ?? data.address?.region ?? null,
+    country: data.address?.country ?? null,
+    countryCode: data.address?.country_code?.toUpperCase() ?? null,
+    source: 'openstreetmap-nominatim',
+  };
+  setCached(cacheKey, result, 24 * 60 * 60_000);
+  return result;
+}
+
 async function getEarthquakes(): Promise<Earthquake[]> {
   const cacheKey = 'usgs:m4.5-day';
   const cached = getCached<{ earthquakes: Earthquake[] }>(cacheKey);
@@ -194,15 +287,26 @@ function distanceKm(lat1: number, lng1: number, lat2: number, lng2: number) {
   return earthRadiusKm * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-function formatNumber(value: number | null, suffix = '') {
-  return value === null ? 'Unavailable' : `${Math.round(value)}${suffix}`;
+function formatNumber(value: number | null, suffix = '', digits = 0) {
+  return value === null ? 'Unavailable' : `${value.toFixed(digits)}${suffix}`;
 }
 
-function buildLocalIntelligence(
+function aqiCategory(aqi: number | null) {
+  if (aqi === null) return 'Unavailable';
+  if (aqi <= 50) return 'Good';
+  if (aqi <= 100) return 'Moderate';
+  if (aqi <= 150) return 'Unhealthy for sensitive groups';
+  if (aqi <= 200) return 'Unhealthy';
+  if (aqi <= 300) return 'Very unhealthy';
+  return 'Hazardous';
+}
+
+function buildSourceBrief(
   lat: number,
   lng: number,
-  context: string,
+  place: PlaceSnapshot | null,
   weather: WeatherSnapshot | null,
+  airQuality: AirQualitySnapshot | null,
   earthquakes: Earthquake[],
 ) {
   const nearby = earthquakes
@@ -216,91 +320,29 @@ function buildLocalIntelligence(
 
   const weatherLines = weather
     ? [
-        `- Temperature: ${formatNumber(weather.temp, '°C')}`,
+        `- Temperature: ${formatNumber(weather.temp, '°C', 1)}`,
         `- Humidity: ${formatNumber(weather.humidity, '%')}`,
-        `- Wind: ${formatNumber(weather.windSpeed, ' km/h')}`,
+        `- Wind: ${formatNumber(weather.windSpeed, ' km/h', 1)}`,
         `- Observation time: ${weather.observed || 'Unavailable'}`,
       ].join('\n')
     : '- Current weather could not be retrieved.';
 
-  return `# Location Intelligence\n\n**Coordinates:** ${lat.toFixed(4)}, ${lng.toFixed(4)}  \n**Mode:** Verified source summary\n\n## Current weather\n${weatherLines}\n\n## Nearby seismic context\n${seismicLines}\n\n## Requested focus\n${context || 'General location overview'}\n\n## Sources and limits\n- Weather: Open-Meteo current conditions.\n- Seismic events: USGS M4.5+ one-day feed.\n- This fallback does not infer live traffic, transit, maritime, police, military or emergency-response activity.\n- AetherGlobe is exploratory and must not be used for operational decisions.`;
-}
+  const airQualityLines = airQuality
+    ? [
+        `- US AQI: ${formatNumber(airQuality.usAqi)} (${aqiCategory(airQuality.usAqi)})`,
+        `- PM2.5: ${formatNumber(airQuality.pm25, ' μg/m³', 1)}`,
+        `- PM10: ${formatNumber(airQuality.pm10, ' μg/m³', 1)}`,
+        `- Nitrogen dioxide: ${formatNumber(airQuality.nitrogenDioxide, ' μg/m³', 1)}`,
+        `- Ozone: ${formatNumber(airQuality.ozone, ' μg/m³', 1)}`,
+        `- Observation time: ${airQuality.observed || 'Unavailable'}`,
+      ].join('\n')
+    : '- Current air-quality data could not be retrieved.';
 
-function extractOpenAIText(payload: OpenAIResponse) {
-  const topLevel = payload.output_text?.trim();
-  if (topLevel) return topLevel;
+  const locationName = place?.displayName
+    || [place?.locality, place?.region, place?.country].filter(Boolean).join(', ')
+    || 'Name unavailable';
 
-  return payload.output
-    ?.filter((item) => item.type === 'message')
-    .flatMap((item) => item.content || [])
-    .filter((content) => content.type === 'output_text')
-    .map((content) => content.text || '')
-    .join('\n')
-    .trim();
-}
-
-async function callOpenAI(
-  model: string,
-  apiKey: string,
-  prompt: string,
-  useDeepThinking: boolean,
-) {
-  const body: Record<string, unknown> = {
-    model,
-    instructions: 'You are AetherAI, a cautious location intelligence assistant. Preserve source limitations, distinguish current sourced observations from general background, and never invent live traffic, transit, maritime, police, military, or emergency-response feeds.',
-    input: prompt,
-    max_output_tokens: 2_500,
-    store: false,
-  };
-  if (/^(gpt-5|o\d)/i.test(model)) {
-    body.reasoning = { effort: useDeepThinking ? 'medium' : 'low' };
-  }
-
-  const response = await fetchWithTimeout('https://api.openai.com/v1/responses', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-  }, OPENAI_TIMEOUT_MS);
-
-  const payload = await response.json() as OpenAIResponse;
-  if (!response.ok) {
-    throw new Error(payload.error?.message || `OpenAI ${model} request failed with ${response.status}`);
-  }
-
-  const text = extractOpenAIText(payload);
-  if (!text) throw new Error(`OpenAI ${model} returned no text`);
-  return text;
-}
-
-async function enrichIntelligence(
-  localReport: string,
-  context: string,
-  useDeepThinking: boolean,
-  apiKey: string,
-  configuredModel?: string,
-) {
-  const models = Array.from(new Set([
-    normalizeOpenAIModel(configuredModel),
-    DEFAULT_OPENAI_MODEL,
-    FALLBACK_OPENAI_MODEL,
-  ].filter((model): model is string => Boolean(model))));
-
-  const prompt = `${useDeepThinking ? 'Provide a detailed, risk-aware interpretation while remaining concise and explicit about uncertainty.' : 'Keep the response concise, practical, and explicit about uncertainty.'}\n\nUSER REQUEST:\n${context || 'General location overview'}\n\nVERIFIED SOURCE SUMMARY:\n${localReport}`;
-
-  const failures: string[] = [];
-  for (const model of models) {
-    try {
-      return { report: await callOpenAI(model, apiKey, prompt, useDeepThinking), model };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      failures.push(`${model}: ${message}`);
-      console.warn(`OpenAI model fallback failed (${model}):`, message);
-    }
-  }
-  throw new Error(failures.join(' | '));
+  return `# Current Source Brief\n\n**Location:** ${locationName}  \n**Coordinates:** ${lat.toFixed(4)}, ${lng.toFixed(4)}  \n**Method:** Direct public data aggregation; no language model\n\n## Current weather\n${weatherLines}\n\n## Current air quality\n${airQualityLines}\n\n## Nearby seismic context\n${seismicLines}\n\n## Sources and limits\n- Place name: OpenStreetMap Nominatim reverse geocoding.\n- Weather: Open-Meteo current conditions.\n- Air quality: Open-Meteo Air Quality current conditions.\n- Seismic events: USGS M4.5+ one-day GeoJSON feed.\n- Aircraft and vessel positions are displayed as separate live layers and are not interpreted in this text brief.\n- Data can be delayed, incomplete, or unavailable. AetherGlobe is exploratory and must not be used for operational decisions.`;
 }
 
 async function readJsonBody(request: Request) {
@@ -339,52 +381,35 @@ function applyRateLimit(clientIp: string, requestType: RestrictedRequest) {
   return general;
 }
 
-async function generateIntelligence(body: Record<string, unknown>, env: RuntimeEnv) {
+async function generateSourceBrief(body: Record<string, unknown>) {
   const lat = parseCoordinate(body.lat, -90, 90, 'latitude');
   const lng = parseCoordinate(body.lng, -180, 180, 'longitude');
-  const context = typeof body.context === 'string' ? body.context.trim().slice(0, 1_200) : '';
-  const useDeepThinking = body.useDeepThinking === true;
-  const cacheKey = `intelligence:${lat.toFixed(4)}:${lng.toFixed(4)}:${context}:${useDeepThinking}`;
+  const cacheKey = `source-brief:${lat.toFixed(4)}:${lng.toFixed(4)}`;
   const cached = getCached(cacheKey);
   if (cached) return cached;
 
-  const [weatherResult, earthquakeResult] = await Promise.allSettled([
+  const [placeResult, weatherResult, airQualityResult, earthquakeResult] = await Promise.allSettled([
+    getPlaceSnapshot(lat, lng),
     getWeatherSnapshot(lat, lng),
+    getAirQualitySnapshot(lat, lng),
     getEarthquakes(),
   ]);
+  const place = placeResult.status === 'fulfilled' ? placeResult.value : null;
   const weather = weatherResult.status === 'fulfilled' ? weatherResult.value : null;
+  const airQuality = airQualityResult.status === 'fulfilled' ? airQualityResult.value : null;
   const earthquakes = earthquakeResult.status === 'fulfilled' ? earthquakeResult.value : [];
-  const localReport = buildLocalIntelligence(lat, lng, context, weather, earthquakes);
-  const apiKey = env.OPENAI_API_KEY?.trim();
 
-  let result: Record<string, unknown> = {
-    report: `${localReport}\n\n> AI enrichment is not configured; this report was generated directly from the named data sources.`,
-    mode: 'local-fallback',
+  const result = {
+    report: buildSourceBrief(lat, lng, place, weather, airQuality, earthquakes),
+    mode: 'direct-source-brief',
     model: null,
-    sources: ['open-meteo', 'usgs'],
+    sources: [
+      ...(place ? ['openstreetmap-nominatim'] : []),
+      ...(weather ? ['open-meteo'] : []),
+      ...(airQuality ? ['open-meteo-air-quality'] : []),
+      ...(earthquakeResult.status === 'fulfilled' ? ['usgs'] : []),
+    ],
   };
-
-  if (apiKey) {
-    try {
-      const enriched = await enrichIntelligence(localReport, context, useDeepThinking, apiKey, env.OPENAI_MODEL);
-      result = {
-        report: `${enriched.report}\n\n---\n**Verified current sources:** Open-Meteo weather and USGS M4.5+ one-day seismic feed. OpenAI provided narrative enrichment; verify important claims.`,
-        mode: 'openai-enriched',
-        model: enriched.model,
-        sources: ['open-meteo', 'usgs', 'openai'],
-      };
-    } catch (error) {
-      console.error('OpenAI enrichment unavailable; returning local report:', error);
-      result = {
-        report: `${localReport}\n\n> OpenAI enrichment was unavailable, so AetherGlobe returned its verified source summary instead.`,
-        mode: 'local-fallback',
-        model: null,
-        sources: ['open-meteo', 'usgs'],
-        warning: 'OpenAI enrichment unavailable',
-      };
-    }
-  }
-
   setCached(cacheKey, result, 2 * 60_000);
   return result;
 }
@@ -405,7 +430,7 @@ export async function handleApiRequest(
     const rate = applyRateLimit(clientIp || 'unknown', restrictedRequest);
     if (rate.exceeded) {
       const message = restrictedRequest === 'intelligence'
-        ? 'Too many intelligence requests'
+        ? 'Too many source brief requests'
         : restrictedRequest === 'flight-lookup'
           ? 'Too many flight lookup requests'
           : 'Too many requests';
@@ -418,7 +443,7 @@ export async function handleApiRequest(
 
     if (pathname === '/api/intelligence') {
       if (request.method !== 'POST') return jsonResponse({ error: 'Method not allowed' }, 405, { Allow: 'POST' });
-      return jsonResponse(await generateIntelligence(await readJsonBody(request), env));
+      return jsonResponse(await generateSourceBrief(await readJsonBody(request)));
     }
 
     if (pathname === '/api/weather') {
@@ -431,6 +456,11 @@ export async function handleApiRequest(
     if (pathname === '/api/flights') {
       if (request.method !== 'GET') return jsonResponse({ error: 'Method not allowed' }, 405, { Allow: 'GET' });
       return jsonResponse(await getFlightsForBounds(parseBounds(url.searchParams), env));
+    }
+
+    if (pathname === '/api/vessels') {
+      if (request.method !== 'GET') return jsonResponse({ error: 'Method not allowed' }, 405, { Allow: 'GET' });
+      return jsonResponse(getAisStreamSnapshot(parseBounds(url.searchParams), env));
     }
 
     if (pathname === '/api/flight-lookup') {
@@ -446,22 +476,26 @@ export async function handleApiRequest(
     if (pathname === '/api/health') {
       if (request.method !== 'GET') return jsonResponse({ error: 'Method not allowed' }, 405, { Allow: 'GET' });
       const flightStatus = getFlightProviderStatus(env);
+      const maritimeStatus = getAisStreamStatus(env);
       return jsonResponse({
         status: 'ok',
-        version: '4.3.0',
+        version: '4.4.0',
         runtime: 'shared-api',
-        intelligenceMode: env.OPENAI_API_KEY?.trim() ? 'openai-with-local-fallback' : 'local-source-summary',
-        configuredModel: normalizeOpenAIModel(env.OPENAI_MODEL) || DEFAULT_OPENAI_MODEL,
-        fallbackModel: FALLBACK_OPENAI_MODEL,
+        intelligenceMode: 'direct-source-brief',
         cacheEntries: responseCache.size,
         flightSource: flightStatus.primaryFlightSource,
         localReceiverConfigured: flightStatus.localReceiverConfigured,
         aviationstackConfigured: flightStatus.aviationstackConfigured,
+        aisstreamConfigured: maritimeStatus.configured,
+        aisstreamMode: maritimeStatus.mode,
         feeds: [
+          'openstreetmap-nominatim',
           'open-meteo',
+          'open-meteo-air-quality',
           'usgs',
           flightStatus.primaryFlightSource,
           ...(flightStatus.aviationstackConfigured ? ['aviationstack-on-demand'] : []),
+          ...(maritimeStatus.configured ? [`aisstream-${maritimeStatus.mode}`] : []),
         ],
       });
     }
