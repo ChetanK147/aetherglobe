@@ -1,18 +1,14 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { BrainCircuit, Map as MapIcon, PanelRightOpen } from 'lucide-react';
 import NavigationHUD from './components/NavigationHUD';
-import VisionProHUD from './components/VisionProHUD';
-import TacticalHUD from './components/TacticalHUD';
-import GTA6Interface from './components/GTA6Interface';
 import type { AppState, WeatherData } from './types';
 import { getGlobalIntelligence } from './services/intelligenceService';
-import { getCriticalEvents, getLiveFlights } from './services/liveDataService';
+import { getCriticalEvents, getLiveFlights, getLiveVessels } from './services/liveDataService';
 
 const AtmosphericGlobe = lazy(() => import('./components/AtmosphericGlobe'));
 const TacticalMap = lazy(() => import('./components/TacticalMap'));
 const IntelligenceCenter = lazy(() => import('./components/IntelligenceCenter'));
 
-type UiMode = 'vision' | 'tactical' | 'gta6';
 type MobilePanel = 'intelligence' | 'status' | null;
 
 function weatherCodeToCondition(code: number | null): string {
@@ -56,7 +52,6 @@ async function fetchWeather(lat: number, lng: number): Promise<WeatherData | nul
 }
 
 export default function App() {
-  const [uiMode, setUiMode] = useState<UiMode>('vision');
   const [mobilePanel, setMobilePanel] = useState<MobilePanel>(null);
   const [desktopPanels, setDesktopPanels] = useState({ intelligence: true, status: true });
   const [state, setState] = useState<AppState>({
@@ -67,11 +62,13 @@ export default function App() {
     weather: null,
     layerIntensities: {
       'Global Air Traffic': 1,
+      'Maritime Traffic': 1,
       'Seismic Activity': 1,
       'Satellite Cloud Cover': 1,
     },
     surfaceViewActive: false,
     liveFlights: [],
+    liveVessels: [],
     criticalEvents: [],
   });
 
@@ -80,7 +77,6 @@ export default function App() {
     if (!selected) return;
 
     let active = true;
-
     const fetchGlobalData = async () => {
       const radius = 10;
       const minLat = Math.max(-90, selected.lat - radius);
@@ -108,6 +104,32 @@ export default function App() {
     };
   }, [state.selectedLocation]);
 
+  useEffect(() => {
+    const selected = state.selectedLocation;
+    if (!selected) return;
+
+    let active = true;
+    const fetchMaritimeData = async () => {
+      const radius = 3;
+      const vessels = await getLiveVessels(
+        Math.max(-90, selected.lat - radius),
+        Math.max(-180, selected.lng - radius),
+        Math.min(90, selected.lat + radius),
+        Math.min(180, selected.lng + radius),
+      );
+      if (active) {
+        setState((previous) => ({ ...previous, liveVessels: vessels }));
+      }
+    };
+
+    void fetchMaritimeData();
+    const interval = window.setInterval(fetchMaritimeData, 5_000);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, [state.selectedLocation]);
+
   const handleIntensityChange = (layerName: string, value: number) => {
     setState((previous) => ({
       ...previous,
@@ -115,15 +137,10 @@ export default function App() {
     }));
   };
 
-  const handleIntelligenceRequest = async (
-    lat: number,
-    lng: number,
-    context: string,
-    useDeepThinking = false,
-  ) => {
+  const refreshSourceBrief = async (lat: number, lng: number) => {
     setState((previous) => ({ ...previous, isLoading: true }));
     const [report, weather] = await Promise.all([
-      getGlobalIntelligence(lat, lng, context, useDeepThinking),
+      getGlobalIntelligence(lat, lng),
       fetchWeather(lat, lng),
     ]);
     setState((previous) => ({
@@ -143,9 +160,10 @@ export default function App() {
       intelligenceReport: null,
       weather: null,
       liveFlights: [],
+      liveVessels: [],
       criticalEvents: [],
     }));
-    void handleIntelligenceRequest(lat, lng, 'Analyze this selected location using verified sources.');
+    void refreshSourceBrief(lat, lng);
   };
 
   const requestGeolocation = () => {
@@ -165,13 +183,10 @@ export default function App() {
           intelligenceReport: null,
           weather: null,
           liveFlights: [],
+          liveVessels: [],
           criticalEvents: [],
         }));
-        void handleIntelligenceRequest(
-          location.lat,
-          location.lng,
-          'Provide a baseline overview for the current coordinates.',
-        );
+        void refreshSourceBrief(location.lat, location.lng);
       },
       (error) => {
         console.warn('Geolocation unavailable:', error);
@@ -187,7 +202,6 @@ export default function App() {
     setState((previous) => ({ ...previous, surfaceViewActive: !previous.surfaceViewActive }));
   };
 
-  const primaryFlight = state.liveFlights[0];
   const desktopGridColumns = desktopPanels.intelligence
     ? desktopPanels.status
       ? 'lg:grid-cols-[280px_minmax(0,1fr)_280px]'
@@ -206,6 +220,7 @@ export default function App() {
             targetLocation={state.selectedLocation}
             layerIntensities={state.layerIntensities}
             liveFlights={state.liveFlights}
+            liveVessels={state.liveVessels}
             criticalEvents={state.criticalEvents}
           />
         </Suspense>
@@ -216,6 +231,7 @@ export default function App() {
         weather={state.weather}
         selectedCoord={state.selectedLocation}
         flightCount={state.liveFlights.length}
+        vesselCount={state.liveVessels.length}
         eventCount={state.criticalEvents.length}
         mobileOpen={mobilePanel === 'status'}
         onMobileClose={() => setMobilePanel(null)}
@@ -248,72 +264,13 @@ export default function App() {
           desktopOpen={desktopPanels.intelligence}
           onDesktopToggle={() => setDesktopPanels((previous) => ({ ...previous, intelligence: !previous.intelligence }))}
           onIntensityChange={handleIntensityChange}
-          onAsk={(prompt, useDeepThinking) => {
+          onRefresh={() => {
             if (state.selectedLocation) {
-              void handleIntelligenceRequest(
-                state.selectedLocation.lat,
-                state.selectedLocation.lng,
-                prompt,
-                useDeepThinking,
-              );
+              void refreshSourceBrief(state.selectedLocation.lat, state.selectedLocation.lng);
             }
           }}
         />
       </Suspense>
-
-      {uiMode === 'vision' && state.selectedLocation && (
-        <VisionProHUD
-          data={{
-            altitude: primaryFlight?.altitude ?? 0,
-            speed: primaryFlight?.velocity ?? 0,
-            heading: primaryFlight?.track ?? 0,
-            timestamp: Date.now(),
-          }}
-        />
-      )}
-
-      {uiMode === 'tactical' && (
-        <TacticalHUD
-          data={{
-            threats: state.criticalEvents.length,
-            targets: state.liveFlights.length,
-            contacts: state.liveFlights.length + state.criticalEvents.length,
-            scanRadius: 250,
-          }}
-        />
-      )}
-
-      {uiMode === 'gta6' && state.selectedLocation && (
-        <GTA6Interface
-          data={{
-            radar: state.liveFlights.slice(0, 5).map((_, index) => ({
-              x: Math.sin(index) * 0.5,
-              y: Math.cos(index) * 0.5,
-              type: index === 0 ? 'threat' : 'npc',
-            })),
-            health: 100,
-            armor: 100,
-            wanted: Math.min(5, state.criticalEvents.length),
-            location: `${state.selectedLocation.lat.toFixed(2)}, ${state.selectedLocation.lng.toFixed(2)}`,
-          }}
-        />
-      )}
-
-      <div className="fixed left-1/2 top-[4.5rem] z-[55] flex -translate-x-1/2 gap-1 rounded-xl border border-white/10 bg-black/65 p-1.5 backdrop-blur-xl lg:absolute lg:top-4">
-        {(['vision', 'tactical', 'gta6'] as const).map((mode) => (
-          <button
-            key={mode}
-            type="button"
-            onClick={() => setUiMode(mode)}
-            aria-pressed={uiMode === mode}
-            className={`min-h-9 rounded-lg px-2.5 text-[0.65rem] font-semibold uppercase tracking-wide transition sm:px-3 sm:text-xs ${
-              uiMode === mode ? 'bg-accent text-black' : 'bg-white/5 text-white/60 hover:bg-white/15'
-            }`}
-          >
-            {mode === 'vision' ? 'Vision' : mode === 'tactical' ? 'Tactical' : 'Cinematic'}
-          </button>
-        ))}
-      </div>
 
       <nav className="fixed bottom-3 left-3 right-3 z-[75] grid grid-cols-3 gap-2 rounded-2xl border border-accent/20 bg-black/80 p-2 backdrop-blur-xl lg:hidden">
         <button
@@ -322,7 +279,7 @@ export default function App() {
           aria-pressed={mobilePanel === 'intelligence'}
           className={`flex min-h-11 items-center justify-center gap-2 rounded-xl text-[0.68rem] font-bold uppercase ${mobilePanel === 'intelligence' ? 'bg-accent text-black' : 'bg-white/5 text-accent'}`}
         >
-          <BrainCircuit size={16} /> Intel
+          <BrainCircuit size={16} /> Sources
         </button>
         <button
           type="button"

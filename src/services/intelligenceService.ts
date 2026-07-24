@@ -3,46 +3,27 @@ interface IntelligenceResponse {
   error?: string;
 }
 
-async function requestIntelligence(payload: Record<string, unknown>): Promise<string> {
+async function requestSourceBrief(lat: number, lng: number): Promise<string> {
   const response = await fetch('/api/intelligence', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
+    body: JSON.stringify({ lat, lng }),
   });
 
   const data = await response.json() as IntelligenceResponse;
   if (!response.ok) {
-    throw new Error(data.error || 'Intelligence service unavailable');
+    throw new Error(data.error || 'Source brief unavailable');
   }
-  return data.report || 'No intelligence report returned.';
+  return data.report || 'No source brief returned.';
 }
 
-export async function getGlobalIntelligence(
-  lat: number,
-  lng: number,
-  context: string,
-  useDeepThinking = false,
-) {
+export async function getGlobalIntelligence(lat: number, lng: number) {
   try {
-    return await requestIntelligence({ lat, lng, context, useDeepThinking });
+    return await requestSourceBrief(lat, lng);
   } catch (error) {
-    console.error('Intelligence request failed:', error);
+    console.error('Source brief request failed:', error);
     return error instanceof Error
-      ? `Intelligence service unavailable: ${error.message}`
-      : 'Intelligence service unavailable.';
-  }
-}
-
-export async function getHistoricalAnalysis(location: string, type: 'weather' | 'traffic') {
-  try {
-    return await requestIntelligence({
-      lat: 0,
-      lng: 0,
-      context: `Provide a concise historical analysis of ${type} patterns for ${location} over the last decade. Clearly identify estimates and cite sources when available.`,
-      useDeepThinking: true,
-    });
-  } catch (error) {
-    console.error('Historical analysis failed:', error);
-    return 'Historical archives unreachable.';
+      ? `Source brief unavailable: ${error.message}`
+      : 'Source brief unavailable.';
   }
 }

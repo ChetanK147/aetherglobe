@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
       - run: npm ci
       - run: npm run lint
@@ -27,9 +27,8 @@ jobs:
           test -f netlify.toml
           test -f netlify/functions/api.ts
           test -f lib/api.ts
-      - name: Smoke test source-backed intelligence
-        env:
-          OPENAI_API_KEY: ''
+          test -f lib/aisStreamHub.ts
+      - name: Smoke test direct source brief
         run: |
           npm run dev > /tmp/aetherglobe.log 2>&1 &
           SERVER_PID=$!
@@ -45,16 +44,15 @@ jobs:
           curl --max-time 35 -fsS \
             -X POST http://127.0.0.1:3000/api/intelligence \
             -H 'Content-Type: application/json' \
-            -d '{"lat":19.9975,"lng":73.7898,"context":"CI fallback check"}' \
+            -d '{"lat":19.9975,"lng":73.7898}' \
             > /tmp/intelligence.json
 
           node --input-type=module -e "
             import fs from 'node:fs';
             const health = JSON.parse(fs.readFileSync('/tmp/health.json', 'utf8'));
             const intelligence = JSON.parse(fs.readFileSync('/tmp/intelligence.json', 'utf8'));
-            if (health.intelligenceMode !== 'local-source-summary') throw new Error('Unexpected health intelligence mode');
-            if (health.configuredModel !== 'gpt-5.2') throw new Error('Unexpected default OpenAI model');
-            if (health.fallbackModel !== 'gpt-5-mini') throw new Error('Unexpected fallback OpenAI model');
-            if (intelligence.mode !== 'local-fallback') throw new Error('Fallback mode was not used');
-            if (typeof intelligence.report !== 'string' || intelligence.report.length < 100) throw new Error('Intelligence report missing');
+            if (health.intelligenceMode !== 'direct-source-brief') throw new Error('Unexpected source brief mode');
+            if (intelligence.mode !== 'direct-source-brief') throw new Error('Direct source brief was not used');
+            if (intelligence.model !== null) throw new Error('A language model should not be configured');
+            if (typeof intelligence.report !== 'string' || intelligence.report.length < 100) throw new Error('Source brief missing');
           "

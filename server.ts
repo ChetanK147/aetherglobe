@@ -54,12 +54,14 @@ async function startServer() {
     const apiResponse = await handleApiRequest(
       new globalThis.Request(`${protocol}://${host}${req.originalUrl}`, requestInit),
       {
-        OPENAI_API_KEY: process.env.OPENAI_API_KEY,
-        OPENAI_MODEL: process.env.OPENAI_MODEL,
         DUMP1090_AIRCRAFT_URL: process.env.DUMP1090_AIRCRAFT_URL,
         DUMP1090_MAX_POSITION_AGE_SECONDS: process.env.DUMP1090_MAX_POSITION_AGE_SECONDS,
         AVIATIONSTACK_API_KEY: process.env.AVIATIONSTACK_API_KEY,
         AVIATIONSTACK_BASE_URL: process.env.AVIATIONSTACK_BASE_URL,
+        AISSTREAM_API_KEY: process.env.AISSTREAM_API_KEY,
+        AISSTREAM_URL: process.env.AISSTREAM_URL,
+        AISSTREAM_MAX_POSITION_AGE_SECONDS: process.env.AISSTREAM_MAX_POSITION_AGE_SECONDS,
+        AISSTREAM_RUNTIME: 'persistent',
       },
       req.ip || req.socket.remoteAddress || 'unknown',
     );

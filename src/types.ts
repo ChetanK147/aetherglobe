@@ -25,6 +25,23 @@ export interface FlightData {
   registration?: string | null;
 }
 
+export interface VesselData {
+  id: string;
+  mmsi: string;
+  name: string;
+  lat: number;
+  lng: number;
+  speedKnots: number | null;
+  courseDegrees: number | null;
+  headingDegrees: number | null;
+  navigationalStatus: number | null;
+  vesselType: number | null;
+  destination: string | null;
+  observedAt: number;
+  positionAgeSeconds: number;
+  source: 'aisstream';
+}
+
 export interface CriticalEvent {
   id: string;
   magnitude: number;
@@ -45,5 +62,6 @@ export interface AppState {
   layerIntensities: Record<string, number>;
   surfaceViewActive: boolean;
   liveFlights: FlightData[];
+  liveVessels: VesselData[];
   criticalEvents: CriticalEvent[];
 }
