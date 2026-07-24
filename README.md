@@ -9,6 +9,7 @@ AetherGlobe is a cinematic 3D globe for exploring location context with clearly 
 - M4.5+ earthquake events from USGS
 - Nearby aircraft from a local dump1090 receiver when configured
 - Sampled Aviationstack live-position fallback when the configured receiver cannot be reached
+- Sampled Aviationstack global live-position mode when no local receiver exists in the runtime
 - Automatic fallback to the existing unofficial public aircraft feed when neither local nor Aviationstack live positions are usable
 - On-demand Aviationstack flight-number lookup for airline, route, schedule, aircraft and available live fields
 - Source-backed location intelligence that works without an AI key
@@ -83,17 +84,17 @@ The local Express server runs on `http://localhost:3000` by default. Restart it 
 
 ## Aircraft source order
 
-`GET /api/flights` uses this order when a local receiver URL is configured:
+`GET /api/flights` uses this source order:
 
-1. Read fresh positions directly from dump1090.
-2. If dump1090 cannot be reached, request active flights from Aviationstack.
-3. Keep only Aviationstack records that contain usable live latitude and longitude inside the requested bounds.
+1. Read fresh positions directly from dump1090 when a receiver URL is configured and reachable.
+2. If dump1090 cannot be reached, request active flights from Aviationstack and keep only records with usable live coordinates inside the requested bounds.
+3. When no local receiver exists in the runtime, use the Aviationstack live records as a clearly marked global sample.
 4. Convert Aviationstack altitude from metres to feet and horizontal speed from kilometres per hour to knots so the existing globe can consume the same normalized structure.
 5. If Aviationstack is unavailable or supplies no usable live positions, use the existing unofficial public feed as the final fallback.
 
-The Aviationstack fallback is deliberately labelled as sampled. It requests a maximum of 100 active records, and many commercial-flight records can omit live position fields. It is not equivalent to a complete regional ADS-B radar feed.
+The Aviationstack layer is deliberately labelled as sampled. It requests a maximum of 100 active records, and many commercial-flight records can omit live position fields. It is not equivalent to complete regional or global ADS-B radar coverage.
 
-Successful Aviationstack traffic responses are cached for the configured interval. The default is 15 minutes. This is suitable for occasional prototype outages, but a continuously unavailable receiver can consume API quota quickly. Increase the cache interval or use a plan with enough requests before relying on the fallback continuously.
+Successful Aviationstack traffic responses are cached for the configured interval. The default is 15 minutes. This is suitable for prototype testing and occasional outages, but continuous use can consume API quota quickly. Increase the cache interval or use a plan with enough requests before relying on the fallback continuously.
 
 ## Using flight lookup
 
@@ -134,7 +135,7 @@ OPENAI_API_KEY=your_optional_openai_key
 OPENAI_MODEL=gpt-5.2
 ```
 
-A Netlify Function cannot directly reach a private `192.168.x.x` receiver. Publishing your local receiver observations still requires a separate outbound authenticated bridge. The Aviationstack key can continue powering on-demand lookup on Netlify, while the local receiver fallback described above applies when the runtime is actually configured to attempt that receiver URL.
+A Netlify Function cannot directly reach a private `192.168.x.x` receiver. With an Aviationstack key configured, the public runtime displays a global sample of Aviationstack records that contain live positions and uses the existing public feed if that sample is unavailable. Publishing your own receiver observations publicly still requires a separate outbound authenticated bridge.
 
 For a test deployment, use a Netlify Deploy Preview before publishing to production.
 
@@ -181,4 +182,4 @@ npm test
 npm run build
 ```
 
-Unit tests cover coordinate validation, legitimate zero coordinates, model selection, Aviationstack key handling and response normalization, lookup caching, dump1090 position filtering, and Aviationstack live-position fallback without calling live services.
+Unit tests cover coordinate validation, legitimate zero coordinates, model selection, Aviationstack key handling and response normalization, lookup caching, dump1090 position filtering, regional receiver-outage fallback, and global Aviationstack live-position mode without calling live services.
