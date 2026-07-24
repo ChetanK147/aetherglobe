@@ -52,7 +52,6 @@ interface Dump1090Aircraft {
   gs?: unknown;
   speed?: unknown;
   track?: unknown;
-  baro_rate?: unknown;
   squawk?: unknown;
   category?: unknown;
   t?: unknown;
@@ -112,14 +111,7 @@ interface AviationstackFlight {
     number?: string | null;
     iata?: string | null;
     icao?: string | null;
-    codeshared?: {
-      airline_name?: string | null;
-      airline_iata?: string | null;
-      airline_icao?: string | null;
-      flight_number?: string | null;
-      flight_iata?: string | null;
-      flight_icao?: string | null;
-    } | null;
+    codeshared?: Record<string, unknown> | null;
   } | null;
   aircraft?: {
     registration?: string | null;
@@ -164,8 +156,8 @@ function toNullableString(value: unknown): string | null {
 }
 
 function toEpochSeconds(value: unknown): number {
-  const parsed = toNullableNumber(value) ?? Date.now() / 1000;
-  return parsed > 10_000_000_000 ? parsed / 1000 : parsed;
+  const parsed = toNullableNumber(value) ?? Date.now() / 1_000;
+  return parsed > 10_000_000_000 ? parsed / 1_000 : parsed;
 }
 
 function configuredSecret(value: string | undefined): string | null {
@@ -187,7 +179,7 @@ function parseHttpUrl(value: string, label: string, requireHttps = false): URL {
   } catch {
     throw Object.assign(new Error(`Invalid ${label}`), { status: 500 });
   }
-  const allowed = requireHttps ? url.protocol === 'https:' : ['http:', 'https:'].includes(url.protocol);
+  const allowed = requireHttps ? url.protocol === 'https:' : url.protocol === 'http:' || url.protocol === 'https:';
   if (!allowed) throw Object.assign(new Error(`Invalid ${label}`), { status: 500 });
   return url;
 }
@@ -247,7 +239,7 @@ function normalizeDump1090Aircraft(
     aircraft: toNullableString(aircraft.t) || toNullableString(aircraft.category),
     registration: toNullableString(aircraft.r),
     onGround,
-    observedAt: Math.round((generatedAtSeconds - (positionAge ?? 0)) * 1000),
+    observedAt: Math.round((generatedAtSeconds - (positionAge ?? 0)) * 1_000),
     positionAgeSeconds: positionAge,
     signalDbfs: toNullableNumber(aircraft.rssi),
     source: 'local-dump1090',
@@ -257,15 +249,14 @@ function normalizeDump1090Aircraft(
 async function getDump1090Flights(bounds: FlightBounds, env: FlightProviderEnv) {
   const configuredUrl = env.DUMP1090_AIRCRAFT_URL?.trim();
   if (!configuredUrl) return null;
+
   const url = parseHttpUrl(configuredUrl, 'DUMP1090_AIRCRAFT_URL');
   const maxPositionAge = parsePositiveNumber(env.DUMP1090_MAX_POSITION_AGE_SECONDS, 20, 120);
   const cacheKey = `dump1090:${url.toString()}:${bounds.lamin.toFixed(2)}:${bounds.lomin.toFixed(2)}:${bounds.lamax.toFixed(2)}:${bounds.lomax.toFixed(2)}`;
   const cached = flightCache.get(cacheKey);
   if (cached) return cached;
 
-  const response = await fetchWithTimeout(url.toString(), {
-    headers: { Accept: 'application/json' },
-  }, LOCAL_RECEIVER_TIMEOUT_MS);
+  const response = await fetchWithTimeout(url.toString(), { headers: { Accept: 'application/json' } }, LOCAL_RECEIVER_TIMEOUT_MS);
   if (!response.ok) throw new Error(`Local dump1090 receiver returned ${response.status}`);
 
   const payload = await response.json() as Dump1090Response;
@@ -278,7 +269,7 @@ async function getDump1090Flights(bounds: FlightBounds, env: FlightProviderEnv) 
   const result = {
     flights,
     source: 'local-dump1090',
-    timestamp: Math.round(generatedAtSeconds * 1000),
+    timestamp: Math.round(generatedAtSeconds * 1_000),
     receiverMessages: toNullableNumber(payload.messages),
     warning: 'Direct local ADS-B observations; coverage and completeness depend on the receiver and antenna.',
   };
@@ -289,7 +280,7 @@ async function getDump1090Flights(bounds: FlightBounds, env: FlightProviderEnv) 
 function normalizeAviationstackTrafficFlight(
   flight: AviationstackFlight,
   bounds: FlightBounds | null,
-  fetchedAt: number,
+  evaluatedAt: number,
   maxLiveAgeSeconds: number,
 ): NormalizedFlight | null {
   const live = flight.live;
@@ -300,7 +291,7 @@ function normalizeAviationstackTrafficFlight(
   const observedAt = parseDateMs(live?.updated);
   const positionAgeSeconds = observedAt === null
     ? null
-    : Math.max(0, Math.round((fetchedAt - observedAt) / 1000));
+    : Math.max(0, Math.round((evaluatedAt - observedAt) / 1_000));
   if (positionAgeSeconds !== null && positionAgeSeconds > maxLiveAgeSeconds) return null;
 
   const icao24 = toNullableString(flight.aircraft?.icao24)?.toLowerCase();
@@ -378,7 +369,7 @@ async function fetchAviationstackTrafficSnapshot(env: FlightProviderEnv): Promis
     pagination: payload.pagination ?? null,
     data: Array.isArray(payload.data) ? payload.data : [],
   };
-  flightCache.set(cacheKey, snapshot, { ttl: cacheSeconds * 1000 });
+  flightCache.set(cacheKey, snapshot, { ttl: cacheSeconds * 1_000 });
   return snapshot;
 }
 
@@ -396,11 +387,12 @@ async function getAviationstackTraffic(
     DEFAULT_AVIATIONSTACK_MAX_LIVE_AGE_SECONDS,
     86_400,
   );
+  const evaluatedAt = Date.now();
   const flights = snapshot.data
     .map((flight) => normalizeAviationstackTrafficFlight(
       flight,
       scope === 'regional' ? bounds : null,
-      snapshot.fetchedAt,
+      evaluatedAt,
       maxLiveAgeSeconds,
     ))
     .filter((flight): flight is NormalizedFlight => flight !== null);
@@ -415,7 +407,7 @@ async function getAviationstackTraffic(
     scope,
     warning: scope === 'regional'
       ? `Local dump1090 receiver unavailable: ${localFailure}. Aviationstack fallback shows only active records with valid live positions inside the selected bounds from a capped 100-record response. Positions can be delayed, incomplete, or absent and must not be used operationally.`
-      : `Local dump1090 receiver is not available in this runtime. Aviationstack is showing a global sample of active records with valid live positions from a capped 100-record response. It is not complete radar coverage and must not be used operationally.`,
+      : 'Local dump1090 receiver is not available in this runtime. Aviationstack is showing a global sample of active records with valid live positions from a capped 100-record response. It is not complete radar coverage and must not be used operationally.',
   };
 }
 
@@ -476,24 +468,17 @@ export async function getFlightsForBounds(bounds: FlightBounds, env: FlightProvi
 
       try {
         const aviationstackResult = await getAviationstackTraffic(bounds, env, localMessage, 'regional');
-        if (aviationstackResult && aviationstackResult.flights.length > 0) {
-          return aviationstackResult;
-        }
+        if (aviationstackResult && aviationstackResult.flights.length > 0) return aviationstackResult;
         const reason = aviationstackResult
           ? 'Aviationstack returned no usable live positions inside the selected bounds.'
           : 'Aviationstack is not configured.';
-        return getFlightradar24Flights(
-          bounds,
-          `Local dump1090 receiver unavailable: ${localMessage}. ${reason}`,
-        );
+        return getFlightradar24Flights(bounds, `Local dump1090 receiver unavailable: ${localMessage}. ${reason}`);
       } catch (aviationstackError) {
-        const aviationstackMessage = aviationstackError instanceof Error
-          ? aviationstackError.message
-          : String(aviationstackError);
-        console.warn('Aviationstack traffic fallback unavailable:', aviationstackMessage);
+        const message = aviationstackError instanceof Error ? aviationstackError.message : String(aviationstackError);
+        console.warn('Aviationstack traffic fallback unavailable:', message);
         return getFlightradar24Flights(
           bounds,
-          `Local dump1090 receiver unavailable: ${localMessage}. Aviationstack fallback unavailable: ${aviationstackMessage}.`,
+          `Local dump1090 receiver unavailable: ${localMessage}. Aviationstack fallback unavailable: ${message}.`,
         );
       }
     }
@@ -507,29 +492,25 @@ export async function getFlightsForBounds(bounds: FlightBounds, env: FlightProvi
         'Local dump1090 receiver is not configured for this runtime',
         'global',
       );
-      if (aviationstackResult && aviationstackResult.flights.length > 0) {
-        return aviationstackResult;
-      }
+      if (aviationstackResult && aviationstackResult.flights.length > 0) return aviationstackResult;
       return getFlightradar24Flights(
         bounds,
         'Aviationstack returned no usable live positions in its sampled active-flight response.',
       );
     } catch (aviationstackError) {
-      const aviationstackMessage = aviationstackError instanceof Error
-        ? aviationstackError.message
-        : String(aviationstackError);
-      console.warn('Aviationstack traffic source unavailable:', aviationstackMessage);
-      return getFlightradar24Flights(
-        bounds,
-        `Aviationstack traffic source unavailable: ${aviationstackMessage}.`,
-      );
+      const message = aviationstackError instanceof Error ? aviationstackError.message : String(aviationstackError);
+      console.warn('Aviationstack traffic source unavailable:', message);
+      return getFlightradar24Flights(bounds, `Aviationstack traffic source unavailable: ${message}.`);
     }
   }
 
   return getFlightradar24Flights(bounds);
 }
 
-function normalizeFlightQuery(value: string | null): { query: string; filter: 'flight_iata' | 'flight_icao' | 'flight_number' } {
+function normalizeFlightQuery(value: string | null): {
+  query: string;
+  filter: 'flight_iata' | 'flight_icao' | 'flight_number';
+} {
   const query = value?.replace(/[\s-]+/g, '').toUpperCase() || '';
   if (/^[A-Z]{2}\d{1,4}[A-Z]?$/.test(query)) return { query, filter: 'flight_iata' };
   if (/^[A-Z]{3}\d{1,4}[A-Z]?$/.test(query)) return { query, filter: 'flight_icao' };
@@ -564,7 +545,7 @@ export async function lookupAviationstackFlight(value: string | null, env: Fligh
   const apiKey = configuredSecret(env.AVIATIONSTACK_API_KEY);
   if (!apiKey) {
     throw Object.assign(
-      new Error('Aviationstack is not configured. Add AVIATIONSTACK_API_KEY to .env.local and restart the server.'),
+      new Error('Aviationstack is not configured. Add AVIATIONSTACK_API_KEY to the server environment; for local use, run npm run setup:env and restart the server.'),
       { status: 503, expose: true },
     );
   }
