@@ -1,4 +1,10 @@
 import { LRUCache } from 'lru-cache';
+import {
+  getFlightProviderStatus,
+  getFlightsForBounds,
+  lookupAviationstackFlight,
+  type FlightProviderEnv,
+} from './flightProviders.ts';
 
 const REQUEST_TIMEOUT_MS = 12_000;
 const OPENAI_TIMEOUT_MS = 30_000;
@@ -7,8 +13,9 @@ const FALLBACK_OPENAI_MODEL = 'gpt-5-mini';
 const responseCache = new LRUCache<string, unknown>({ max: 500, ttl: 60_000 });
 const rateBuckets = new LRUCache<string, { count: number; resetAt: number }>({ max: 5_000, ttl: 60_000 });
 const intelligenceBuckets = new LRUCache<string, { count: number; resetAt: number }>({ max: 5_000, ttl: 60_000 });
+const flightLookupBuckets = new LRUCache<string, { count: number; resetAt: number }>({ max: 5_000, ttl: 60_000 });
 
-export interface RuntimeEnv {
+export interface RuntimeEnv extends FlightProviderEnv {
   OPENAI_API_KEY?: string;
   OPENAI_MODEL?: string;
 }
@@ -42,18 +49,7 @@ interface OpenAIResponse {
   error?: { message?: string };
 }
 
-interface FlightRecord {
-  id: string;
-  callsign: string;
-  lat: number;
-  lng: number;
-  altitude: number | null;
-  velocity: number | null;
-  track: number | null;
-  squawk: string | number | null;
-  aircraft: string | null;
-  registration: string | null;
-}
+type RestrictedRequest = 'intelligence' | 'flight-lookup' | null;
 
 function consumeRateBucket(
   cache: LRUCache<string, { count: number; resetAt: number }>,
@@ -186,60 +182,6 @@ async function getEarthquakes(): Promise<Earthquake[]> {
 
   setCached(cacheKey, { earthquakes, source: 'usgs', timestamp: Date.now() }, 60_000);
   return earthquakes;
-}
-
-function toNullableNumber(value: unknown): number | null {
-  if (value === null || value === undefined || (typeof value === 'string' && value.trim() === '')) {
-    return null;
-  }
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function toNullableString(value: unknown): string | null {
-  return typeof value === 'string' && value.trim() ? value.trim() : null;
-}
-
-function parseFlight(value: unknown): FlightRecord | null {
-  if (!Array.isArray(value)) return null;
-  const lat = Number(value[1]);
-  const lng = Number(value[2]);
-  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
-
-  return {
-    id: String(value[0] ?? `${lat}:${lng}`),
-    callsign: toNullableString(value[16]) || toNullableString(value[13]) || 'UNKNOWN',
-    lat,
-    lng,
-    altitude: toNullableNumber(value[4]),
-    velocity: toNullableNumber(value[5]),
-    track: toNullableNumber(value[3]),
-    squawk: typeof value[7] === 'string' || typeof value[7] === 'number' ? value[7] : null,
-    aircraft: toNullableString(value[8]),
-    registration: toNullableString(value[9]),
-  };
-}
-
-async function getFlights(searchParams: URLSearchParams) {
-  const { lamin, lamax, lomin, lomax } = parseBounds(searchParams);
-  const cacheKey = `flights:${lamin.toFixed(2)}:${lomin.toFixed(2)}:${lamax.toFixed(2)}:${lomax.toFixed(2)}`;
-  const cached = getCached(cacheKey);
-  if (cached) return cached;
-
-  const url = `https://data-cloud.flightradar24.com/zones/fcgi/feed.js?bounds=${lamax},${lamin},${lomin},${lomax}&faa=1&satellite=1&mlat=1&flarm=1&adsb=1&gnd=1&air=1&vehicles=0&estimated=1&maxage=14400&stats=0`;
-  const response = await fetchWithTimeout(url, { headers: { 'User-Agent': 'AetherGlobe/1.0' } });
-  if (!response.ok) throw Object.assign(new Error('Flight provider unavailable'), { status: 502 });
-  const data = await response.json() as Record<string, unknown>;
-  const flights = Object.values(data).map(parseFlight).filter((flight): flight is FlightRecord => flight !== null);
-
-  const result = {
-    flights,
-    source: 'flightradar24-unofficial',
-    timestamp: Date.now(),
-    warning: 'Unofficial public feed; availability and accuracy are not guaranteed.',
-  };
-  setCached(cacheKey, result, 15_000);
-  return result;
 }
 
 function distanceKm(lat1: number, lng1: number, lat2: number, lng2: number) {
@@ -389,10 +331,11 @@ function jsonResponse(payload: unknown, status = 200, extraHeaders: Record<strin
   });
 }
 
-function applyRateLimit(clientIp: string, intelligence: boolean) {
+function applyRateLimit(clientIp: string, requestType: RestrictedRequest) {
   const general = consumeRateBucket(rateBuckets, clientIp, 120);
   if (general.exceeded) return general;
-  if (intelligence) return consumeRateBucket(intelligenceBuckets, clientIp, 20);
+  if (requestType === 'intelligence') return consumeRateBucket(intelligenceBuckets, clientIp, 20);
+  if (requestType === 'flight-lookup') return consumeRateBucket(flightLookupBuckets, clientIp, 10);
   return general;
 }
 
@@ -454,11 +397,20 @@ export async function handleApiRequest(
   try {
     const url = new URL(request.url);
     const pathname = url.pathname.replace(/\/$/, '');
-    const intelligenceRequest = pathname === '/api/intelligence';
-    const rate = applyRateLimit(clientIp || 'unknown', intelligenceRequest);
+    const restrictedRequest: RestrictedRequest = pathname === '/api/intelligence'
+      ? 'intelligence'
+      : pathname === '/api/flight-lookup'
+        ? 'flight-lookup'
+        : null;
+    const rate = applyRateLimit(clientIp || 'unknown', restrictedRequest);
     if (rate.exceeded) {
+      const message = restrictedRequest === 'intelligence'
+        ? 'Too many intelligence requests'
+        : restrictedRequest === 'flight-lookup'
+          ? 'Too many flight lookup requests'
+          : 'Too many requests';
       return jsonResponse(
-        { error: intelligenceRequest ? 'Too many intelligence requests' : 'Too many requests' },
+        { error: message },
         429,
         { 'Retry-After': String(Math.ceil((rate.bucket.resetAt - rate.now) / 1000)) },
       );
@@ -478,7 +430,12 @@ export async function handleApiRequest(
 
     if (pathname === '/api/flights') {
       if (request.method !== 'GET') return jsonResponse({ error: 'Method not allowed' }, 405, { Allow: 'GET' });
-      return jsonResponse(await getFlights(url.searchParams));
+      return jsonResponse(await getFlightsForBounds(parseBounds(url.searchParams), env));
+    }
+
+    if (pathname === '/api/flight-lookup') {
+      if (request.method !== 'GET') return jsonResponse({ error: 'Method not allowed' }, 405, { Allow: 'GET' });
+      return jsonResponse(await lookupAviationstackFlight(url.searchParams.get('flight'), env));
     }
 
     if (pathname === '/api/live/usgs') {
@@ -488,6 +445,7 @@ export async function handleApiRequest(
 
     if (pathname === '/api/health') {
       if (request.method !== 'GET') return jsonResponse({ error: 'Method not allowed' }, 405, { Allow: 'GET' });
+      const flightStatus = getFlightProviderStatus(env);
       return jsonResponse({
         status: 'ok',
         version: '4.3.0',
@@ -496,15 +454,24 @@ export async function handleApiRequest(
         configuredModel: normalizeOpenAIModel(env.OPENAI_MODEL) || DEFAULT_OPENAI_MODEL,
         fallbackModel: FALLBACK_OPENAI_MODEL,
         cacheEntries: responseCache.size,
-        feeds: ['open-meteo', 'usgs', 'flightradar24-unofficial'],
+        flightSource: flightStatus.primaryFlightSource,
+        localReceiverConfigured: flightStatus.localReceiverConfigured,
+        aviationstackConfigured: flightStatus.aviationstackConfigured,
+        feeds: [
+          'open-meteo',
+          'usgs',
+          flightStatus.primaryFlightSource,
+          ...(flightStatus.aviationstackConfigured ? ['aviationstack-on-demand'] : []),
+        ],
       });
     }
 
     return jsonResponse({ error: 'API endpoint not found' }, 404);
   } catch (error) {
-    const typedError = error as Error & { status?: number };
+    const typedError = error as Error & { status?: number; expose?: boolean };
     const status = typedError.status || (typedError.name === 'AbortError' ? 504 : 500);
     console.error(typedError);
-    return jsonResponse({ error: status >= 500 ? 'Upstream service error' : typedError.message }, status);
+    const message = status >= 500 && !typedError.expose ? 'Upstream service error' : typedError.message;
+    return jsonResponse({ error: message }, status);
   }
 }

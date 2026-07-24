@@ -56,6 +56,10 @@ async function startServer() {
       {
         OPENAI_API_KEY: process.env.OPENAI_API_KEY,
         OPENAI_MODEL: process.env.OPENAI_MODEL,
+        DUMP1090_AIRCRAFT_URL: process.env.DUMP1090_AIRCRAFT_URL,
+        DUMP1090_MAX_POSITION_AGE_SECONDS: process.env.DUMP1090_MAX_POSITION_AGE_SECONDS,
+        AVIATIONSTACK_API_KEY: process.env.AVIATIONSTACK_API_KEY,
+        AVIATIONSTACK_BASE_URL: process.env.AVIATIONSTACK_BASE_URL,
       },
       req.ip || req.socket.remoteAddress || 'unknown',
     );
