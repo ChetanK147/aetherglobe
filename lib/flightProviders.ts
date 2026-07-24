@@ -2,6 +2,8 @@ import { LRUCache } from 'lru-cache';
 
 const REQUEST_TIMEOUT_MS = 10_000;
 const LOCAL_RECEIVER_TIMEOUT_MS = 3_000;
+const DEFAULT_AVIATIONSTACK_TRAFFIC_CACHE_SECONDS = 15 * 60;
+const DEFAULT_AVIATIONSTACK_MAX_LIVE_AGE_SECONDS = 30 * 60;
 const flightCache = new LRUCache<string, unknown>({ max: 250 });
 const lookupCache = new LRUCache<string, unknown>({ max: 250 });
 
@@ -10,6 +12,8 @@ export interface FlightProviderEnv {
   DUMP1090_MAX_POSITION_AGE_SECONDS?: string;
   AVIATIONSTACK_API_KEY?: string;
   AVIATIONSTACK_BASE_URL?: string;
+  AVIATIONSTACK_TRAFFIC_CACHE_SECONDS?: string;
+  AVIATIONSTACK_MAX_LIVE_AGE_SECONDS?: string;
 }
 
 export interface FlightBounds {
@@ -34,7 +38,7 @@ export interface NormalizedFlight {
   observedAt?: number | null;
   positionAgeSeconds?: number | null;
   signalDbfs?: number | null;
-  source?: 'local-dump1090' | 'flightradar24-unofficial';
+  source?: 'local-dump1090' | 'aviationstack-live-fallback' | 'flightradar24-unofficial';
 }
 
 interface Dump1090Aircraft {
@@ -69,6 +73,13 @@ interface AviationstackError {
   type?: string;
   message?: string;
   info?: string;
+}
+
+interface AviationstackPagination {
+  limit?: number;
+  offset?: number;
+  count?: number;
+  total?: number;
 }
 
 interface AviationstackAirport {
@@ -129,8 +140,15 @@ interface AviationstackFlight {
 }
 
 interface AviationstackResponse {
+  pagination?: AviationstackPagination;
   data?: AviationstackFlight[];
   error?: AviationstackError;
+}
+
+interface AviationstackTrafficSnapshot {
+  fetchedAt: number;
+  pagination: AviationstackPagination | null;
+  data: AviationstackFlight[];
 }
 
 function toNullableNumber(value: unknown): number | null {
@@ -186,6 +204,12 @@ async function fetchWithTimeout(url: string, init: RequestInit = {}, timeoutMs =
 
 function isInsideBounds(lat: number, lng: number, bounds: FlightBounds) {
   return lat >= bounds.lamin && lat <= bounds.lamax && lng >= bounds.lomin && lng <= bounds.lomax;
+}
+
+function parseDateMs(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function normalizeDump1090Aircraft(
@@ -262,6 +286,135 @@ async function getDump1090Flights(bounds: FlightBounds, env: FlightProviderEnv) 
   return result;
 }
 
+function normalizeAviationstackTrafficFlight(
+  flight: AviationstackFlight,
+  bounds: FlightBounds,
+  fetchedAt: number,
+  maxLiveAgeSeconds: number,
+): NormalizedFlight | null {
+  const live = flight.live;
+  const lat = toNullableNumber(live?.latitude);
+  const lng = toNullableNumber(live?.longitude);
+  if (lat === null || lng === null || !isInsideBounds(lat, lng, bounds)) return null;
+
+  const observedAt = parseDateMs(live?.updated);
+  const positionAgeSeconds = observedAt === null
+    ? null
+    : Math.max(0, Math.round((fetchedAt - observedAt) / 1000));
+  if (positionAgeSeconds !== null && positionAgeSeconds > maxLiveAgeSeconds) return null;
+
+  const icao24 = toNullableString(flight.aircraft?.icao24)?.toLowerCase();
+  const callsign = toNullableString(flight.flight?.icao)
+    || toNullableString(flight.flight?.iata)
+    || toNullableString(flight.flight?.number)
+    || icao24?.toUpperCase()
+    || 'UNKNOWN';
+  const id = icao24 && /^[0-9a-f]{6}$/i.test(icao24)
+    ? icao24
+    : `${callsign}:${lat.toFixed(4)}:${lng.toFixed(4)}`;
+  const altitudeMeters = toNullableNumber(live?.altitude);
+  const speedKmh = toNullableNumber(live?.speed_horizontal);
+
+  return {
+    id,
+    callsign,
+    lat,
+    lng,
+    altitude: altitudeMeters === null ? null : Math.round(altitudeMeters * 3.28084),
+    velocity: speedKmh === null ? null : Math.round(speedKmh * 0.539957),
+    track: toNullableNumber(live?.direction),
+    squawk: null,
+    aircraft: toNullableString(flight.aircraft?.icao) || toNullableString(flight.aircraft?.iata),
+    registration: toNullableString(flight.aircraft?.registration),
+    onGround: live?.is_ground === true,
+    observedAt,
+    positionAgeSeconds,
+    signalDbfs: null,
+    source: 'aviationstack-live-fallback',
+  };
+}
+
+function aviationstackErrorStatus(error: AviationstackError | undefined) {
+  const code = String(error?.code ?? error?.type ?? '').toLowerCase();
+  if (code.includes('usage') || code.includes('limit') || code === '104') return 429;
+  if (code.includes('access') || code.includes('key') || code === '101') return 503;
+  return 502;
+}
+
+async function fetchAviationstackTrafficSnapshot(env: FlightProviderEnv): Promise<AviationstackTrafficSnapshot | null> {
+  const apiKey = configuredSecret(env.AVIATIONSTACK_API_KEY);
+  if (!apiKey) return null;
+
+  const cacheSeconds = parsePositiveNumber(
+    env.AVIATIONSTACK_TRAFFIC_CACHE_SECONDS,
+    DEFAULT_AVIATIONSTACK_TRAFFIC_CACHE_SECONDS,
+    86_400,
+  );
+  const cacheKey = 'aviationstack-traffic:active:100';
+  const cached = flightCache.get(cacheKey) as AviationstackTrafficSnapshot | undefined;
+  if (cached) return cached;
+
+  const baseUrl = parseHttpUrl(
+    env.AVIATIONSTACK_BASE_URL?.trim() || 'https://api.aviationstack.com/v1',
+    'AVIATIONSTACK_BASE_URL',
+    true,
+  );
+  const base = baseUrl.toString().endsWith('/') ? baseUrl.toString() : `${baseUrl.toString()}/`;
+  const url = new URL('flights', base);
+  url.searchParams.set('access_key', apiKey);
+  url.searchParams.set('flight_status', 'active');
+  url.searchParams.set('limit', '100');
+
+  const response = await fetchWithTimeout(url.toString(), { headers: { Accept: 'application/json' } });
+  const payload = await response.json().catch(() => ({})) as AviationstackResponse;
+  if (!response.ok || payload.error) {
+    const status = payload.error ? aviationstackErrorStatus(payload.error) : 502;
+    const message = payload.error?.message || payload.error?.info || `Aviationstack returned ${response.status}`;
+    throw Object.assign(new Error(message), { status, expose: status === 503 });
+  }
+
+  const snapshot: AviationstackTrafficSnapshot = {
+    fetchedAt: Date.now(),
+    pagination: payload.pagination ?? null,
+    data: Array.isArray(payload.data) ? payload.data : [],
+  };
+  flightCache.set(cacheKey, snapshot, { ttl: cacheSeconds * 1000 });
+  return snapshot;
+}
+
+async function getAviationstackTraffic(
+  bounds: FlightBounds,
+  env: FlightProviderEnv,
+  localFailure: string,
+) {
+  const snapshot = await fetchAviationstackTrafficSnapshot(env);
+  if (!snapshot) return null;
+
+  const maxLiveAgeSeconds = parsePositiveNumber(
+    env.AVIATIONSTACK_MAX_LIVE_AGE_SECONDS,
+    DEFAULT_AVIATIONSTACK_MAX_LIVE_AGE_SECONDS,
+    86_400,
+  );
+  const flights = snapshot.data
+    .map((flight) => normalizeAviationstackTrafficFlight(
+      flight,
+      bounds,
+      snapshot.fetchedAt,
+      maxLiveAgeSeconds,
+    ))
+    .filter((flight): flight is NormalizedFlight => flight !== null);
+
+  return {
+    flights,
+    source: 'aviationstack-live-fallback',
+    timestamp: snapshot.fetchedAt,
+    sampled: true,
+    upstreamCount: snapshot.pagination?.count ?? snapshot.data.length,
+    upstreamTotal: snapshot.pagination?.total ?? null,
+    warning: `Local dump1090 receiver unavailable: ${localFailure}. Aviationstack fallback shows only active records with valid live positions from a capped 100-record response. Positions can be delayed, incomplete, or absent and must not be used operationally.`,
+  };
+}
+
 function parseFlightradar24Flight(value: unknown): NormalizedFlight | null {
   if (!Array.isArray(value)) return null;
   const lat = toNullableNumber(value[1]);
@@ -314,9 +467,31 @@ export async function getFlightsForBounds(bounds: FlightBounds, env: FlightProvi
       const localResult = await getDump1090Flights(bounds, env);
       if (localResult) return localResult;
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.warn('Local dump1090 receiver unavailable:', message);
-      return getFlightradar24Flights(bounds, `Local dump1090 receiver unavailable: ${message}.`);
+      const localMessage = error instanceof Error ? error.message : String(error);
+      console.warn('Local dump1090 receiver unavailable:', localMessage);
+
+      try {
+        const aviationstackResult = await getAviationstackTraffic(bounds, env, localMessage);
+        if (aviationstackResult && aviationstackResult.flights.length > 0) {
+          return aviationstackResult;
+        }
+        const reason = aviationstackResult
+          ? 'Aviationstack returned no usable live positions inside the selected bounds.'
+          : 'Aviationstack is not configured.';
+        return getFlightradar24Flights(
+          bounds,
+          `Local dump1090 receiver unavailable: ${localMessage}. ${reason}`,
+        );
+      } catch (aviationstackError) {
+        const aviationstackMessage = aviationstackError instanceof Error
+          ? aviationstackError.message
+          : String(aviationstackError);
+        console.warn('Aviationstack traffic fallback unavailable:', aviationstackMessage);
+        return getFlightradar24Flights(
+          bounds,
+          `Local dump1090 receiver unavailable: ${localMessage}. Aviationstack fallback unavailable: ${aviationstackMessage}.`,
+        );
+      }
     }
   }
   return getFlightradar24Flights(bounds);
@@ -350,13 +525,6 @@ function normalizeAviationstackFlight(flight: AviationstackFlight) {
     aircraft: flight.aircraft ?? null,
     live: flight.live ?? null,
   };
-}
-
-function aviationstackErrorStatus(error: AviationstackError | undefined) {
-  const code = String(error?.code ?? error?.type ?? '').toLowerCase();
-  if (code.includes('usage') || code.includes('limit') || code === '104') return 429;
-  if (code.includes('access') || code.includes('key') || code === '101') return 503;
-  return 502;
 }
 
 export async function lookupAviationstackFlight(value: string | null, env: FlightProviderEnv) {
@@ -409,7 +577,9 @@ export function getFlightProviderStatus(env: FlightProviderEnv) {
     localReceiverConfigured,
     aviationstackConfigured,
     primaryFlightSource: localReceiverConfigured
-      ? 'local-dump1090-with-public-fallback'
+      ? aviationstackConfigured
+        ? 'local-dump1090-with-aviationstack-fallback'
+        : 'local-dump1090-with-public-fallback'
       : 'flightradar24-unofficial',
   };
 }
