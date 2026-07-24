@@ -1,5 +1,5 @@
 import React from 'react';
-import { Activity, ChevronDown, ChevronLeft, ChevronRight, Cloud, LogIn, LogOut, Map as MapIcon, MapPin, Navigation, Plane, Radio, Waves, X } from 'lucide-react';
+import { Activity, ChevronDown, ChevronLeft, ChevronRight, Cloud, LogIn, LogOut, Map as MapIcon, MapPin, Navigation, Plane, Radio, Ship, Waves, X } from 'lucide-react';
 import { motion } from 'motion/react';
 import type { Location, WeatherData } from '../types';
 import { useAuth } from './FirebaseProvider';
@@ -10,6 +10,7 @@ interface NavigationHUDProps {
   weather: WeatherData | null;
   selectedCoord: Location | null;
   flightCount: number;
+  vesselCount: number;
   eventCount: number;
   mobileOpen?: boolean;
   onMobileClose?: () => void;
@@ -52,6 +53,7 @@ const NavigationHUD: React.FC<NavigationHUDProps> = ({
   weather,
   selectedCoord,
   flightCount,
+  vesselCount,
   eventCount,
   mobileOpen = false,
   onMobileClose,
@@ -110,7 +112,7 @@ const NavigationHUD: React.FC<NavigationHUDProps> = ({
         <motion.div initial={{ y: -50, opacity: 0 }} animate={{ y: 0, opacity: 1 }} className="flex min-w-0 items-center gap-2.5 sm:gap-4">
           <div className="h-7 w-7 shrink-0 rounded-full border-2 border-accent shadow-[0_0_10px_var(--color-accent-dim)] sm:h-8 sm:w-8" />
           <h1 className="truncate text-sm font-light uppercase tracking-[2px] sm:text-lg sm:tracking-[3px]">
-            AetherGlobe <span className="hidden opacity-50 sm:inline sm:text-[0.8rem]">v4.3</span>
+            AetherGlobe <span className="hidden opacity-50 sm:inline sm:text-[0.8rem]">v4.4</span>
           </h1>
         </motion.div>
 
@@ -132,7 +134,7 @@ const NavigationHUD: React.FC<NavigationHUDProps> = ({
         </div>
       </header>
 
-      <aside className={`${mobileOpen ? 'flex' : 'hidden'} fixed inset-x-3 bottom-20 top-28 z-[70] flex-col gap-2.5 lg:static lg:col-start-3 lg:row-start-2 lg:flex`}>
+      <aside className={`${mobileOpen ? 'flex' : 'hidden'} fixed inset-x-3 bottom-20 top-20 z-[70] flex-col gap-2.5 lg:static lg:col-start-3 lg:row-start-2 lg:flex`}>
         <button
           type="button"
           onClick={onDesktopToggle}
@@ -211,11 +213,14 @@ const NavigationHUD: React.FC<NavigationHUDProps> = ({
               <div className="flex justify-between border-l-2 border-accent bg-black/30 p-2.5">
                 <span className="flex items-center gap-2"><Plane size={12} />Aircraft in sector</span><strong>{flightCount}</strong>
               </div>
+              <div className="flex justify-between border-l-2 border-teal-400 bg-black/30 p-2.5">
+                <span className="flex items-center gap-2"><Ship size={12} />AIS vessels in sector</span><strong>{vesselCount}</strong>
+              </div>
               <div className="flex justify-between border-l-2 border-danger bg-black/30 p-2.5">
                 <span className="flex items-center gap-2"><Activity size={12} />USGS M4.5+ events</span><strong>{eventCount}</strong>
               </div>
               <div className="text-[0.58rem] leading-relaxed opacity-45">
-                Aircraft use the local dump1090 receiver when configured, with an unofficial public fallback. Do not use AetherGlobe for operational decisions.
+                AISstream requires the persistent local Express runtime or a separate relay. Public serverless deployments cannot maintain the upstream WebSocket continuously. Do not use AetherGlobe for operational decisions.
               </div>
             </div>
 
@@ -240,9 +245,9 @@ const NavigationHUD: React.FC<NavigationHUDProps> = ({
       </aside>
 
       <footer className="hidden lg:col-start-1 lg:col-end-4 lg:row-start-3 lg:grid lg:grid-cols-[220px_1fr_220px] lg:items-center lg:border-t lg:border-accent-dim lg:px-5 lg:text-[0.65rem] lg:font-mono glass-panel z-20">
-        <div className="flex items-center gap-3 text-accent"><Radio size={16} /><div><strong>LIVE DATA</strong><div className="opacity-50">30-second refresh</div></div></div>
-        <div className="text-center opacity-55">OPEN-METEO · USGS · LOCAL ADS-B / PUBLIC FALLBACK · AVIATIONSTACK LOOKUP · OPENAI</div>
-        <div className="text-right"><div>AI GENERATED ANALYSIS</div><div className="opacity-50">Verify important claims</div></div>
+        <div className="flex items-center gap-3 text-accent"><Radio size={16} /><div><strong>LIVE DATA</strong><div className="opacity-50">5–30 second refresh</div></div></div>
+        <div className="text-center opacity-55">OPEN-METEO · OPENSTREETMAP · USGS · LOCAL ADS-B · AISSTREAM · AVIATIONSTACK</div>
+        <div className="text-right"><div>DIRECT SOURCE BRIEF</div><div className="opacity-50">No language model</div></div>
       </footer>
     </>
   );
