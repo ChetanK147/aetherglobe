@@ -176,9 +176,9 @@ test('valid zero coordinates return a direct current source brief', async () => 
     assert.match(String(body.report), /Gulf of Guinea/);
     assert.match(String(body.report), /US AQI: 42/);
     assert.match(String(body.report), /no language model/i);
-    assert.ok(requestedHosts.includes('nominatim.openstreetmap.org'));
-    assert.ok(requestedHosts.includes('air-quality-api.open-meteo.com'));
-    assert.ok(!requestedHosts.includes('api.openai.com'));
+    assert.ok(requestedHosts.some((host) => host === 'nominatim.openstreetmap.org'));
+    assert.ok(requestedHosts.some((host) => host === 'air-quality-api.open-meteo.com'));
+    assert.ok(requestedHosts.every((host) => host !== 'api.openai.com'));
   } finally {
     globalThis.fetch = originalFetch;
   }
