@@ -2,7 +2,7 @@ import React from 'react';
 import { MapContainer, Marker, Popup, TileLayer, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { AlertTriangle, MapPin, Plane, X } from 'lucide-react';
+import { AlertTriangle, Loader2, MapPin, Plane, X } from 'lucide-react';
 import { motion } from 'motion/react';
 import type { FlightData } from '../types';
 
@@ -18,10 +18,26 @@ interface MappedFlight extends FlightData {
   distanceKm: number;
 }
 
-const TOMTOM_API_KEY = import.meta.env.VITE_TOMTOM_API_KEY?.trim() || '';
-const TOMTOM_TILE_URL = TOMTOM_API_KEY
-  ? `https://api.tomtom.com/maps/orbis/display/raster/tile/{z}/{x}/{y}?apiVersion=2&style=street-dark&tileSize=256&key=${encodeURIComponent(TOMTOM_API_KEY)}`
-  : '';
+interface ClientConfigResponse {
+  tomtomApiKey?: string | null;
+  tomtomConfigured?: boolean;
+  error?: string;
+}
+
+function buildTomTomTileUrl(apiKey: string) {
+  return `https://api.tomtom.com/maps/orbis/display/raster/tile/{z}/{x}/{y}?apiVersion=2&style=street-dark&tileSize=256&key=${encodeURIComponent(apiKey)}`;
+}
+
+async function fetchTomTomTileUrl() {
+  const response = await fetch('/api/client-config', {
+    headers: { Accept: 'application/json' },
+    cache: 'no-store',
+  });
+  const data = await response.json().catch(() => ({})) as ClientConfigResponse;
+  if (!response.ok) throw new Error(data.error || 'TomTom configuration unavailable');
+  const apiKey = data.tomtomApiKey?.trim();
+  return apiKey ? buildTomTomTileUrl(apiKey) : '';
+}
 
 const targetIcon = L.divIcon({
   className: 'bg-transparent',
@@ -75,6 +91,24 @@ const FitMapView = ({ lat, lng, flights }: { lat: number; lng: number; flights: 
   return null;
 };
 
+function TomTomStatePanel({ loading, error }: { loading: boolean; error: string | null }) {
+  return (
+    <div className="flex h-full items-center justify-center p-6">
+      <div className="max-w-md rounded-xl border border-amber-400/30 bg-black/80 p-5 font-mono text-sm text-amber-100 shadow-2xl">
+        <div className="mb-3 flex items-center gap-2 font-bold uppercase tracking-wider text-amber-300">
+          {loading ? <Loader2 className="animate-spin" size={18} /> : <AlertTriangle size={18} />}
+          {loading ? 'Loading TomTom map' : 'TomTom map not configured'}
+        </div>
+        <p className="leading-relaxed opacity-85">
+          {loading
+            ? 'AetherGlobe is requesting the runtime TomTom map configuration.'
+            : error || 'Add TOMTOM_API_KEY to the Netlify Function/runtime environment and redeploy. Local users can run npm run setup:env, add the key to .env.local, and restart the development server.'}
+        </p>
+      </div>
+    </div>
+  );
+}
+
 const TacticalMap: React.FC<TacticalMapProps> = ({
   lat,
   lng,
@@ -82,6 +116,35 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
   flightIntensity = 1,
   onClose,
 }) => {
+  const [tileUrl, setTileUrl] = React.useState('');
+  const [configLoading, setConfigLoading] = React.useState(true);
+  const [configError, setConfigError] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    let active = true;
+    setConfigLoading(true);
+    setConfigError(null);
+
+    fetchTomTomTileUrl()
+      .then((url) => {
+        if (!active) return;
+        setTileUrl(url);
+        if (!url) setConfigError('TOMTOM_API_KEY is missing from the runtime environment.');
+      })
+      .catch((error) => {
+        if (!active) return;
+        setTileUrl('');
+        setConfigError(error instanceof Error ? error.message : 'TomTom configuration unavailable');
+      })
+      .finally(() => {
+        if (active) setConfigLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
   const mappedFlights = React.useMemo<MappedFlight[]>(() => {
     if (flightIntensity <= 0) return [];
     return flights
@@ -117,11 +180,11 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
       </div>
 
       <div className="relative min-h-0 flex-1 bg-[#0a0a0a]">
-        {TOMTOM_TILE_URL ? (
+        {tileUrl ? (
           <MapContainer center={[lat, lng]} zoom={8} style={{ width: '100%', height: '100%', background: '#0a0a0a' }}>
             <FitMapView lat={lat} lng={lng} flights={mappedFlights} />
             <TileLayer
-              url={TOMTOM_TILE_URL}
+              url={tileUrl}
               maxZoom={22}
               attribution='&copy; <a href="https://www.tomtom.com/copyright/">TomTom</a>'
             />
@@ -150,16 +213,7 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
             </Marker>
           </MapContainer>
         ) : (
-          <div className="flex h-full items-center justify-center p-6">
-            <div className="max-w-md rounded-xl border border-amber-400/30 bg-black/80 p-5 font-mono text-sm text-amber-100 shadow-2xl">
-              <div className="mb-3 flex items-center gap-2 font-bold uppercase tracking-wider text-amber-300">
-                <AlertTriangle size={18} /> TomTom map not configured
-              </div>
-              <p className="leading-relaxed opacity-85">
-                Add <code className="text-accent">VITE_TOMTOM_API_KEY</code> to the build environment and redeploy. Local users can run <code className="text-accent">npm run setup:env</code>, add the key to <code className="text-accent">.env.local</code>, and restart the development server.
-              </p>
-            </div>
-          </div>
+          <TomTomStatePanel loading={configLoading} error={configError} />
         )}
 
         <div className="absolute bottom-3 left-3 right-3 z-[400] rounded-lg border border-white/10 bg-black/85 p-2.5 font-mono text-[9px] leading-relaxed sm:bottom-4 sm:left-4 sm:right-auto sm:max-w-sm sm:p-3 sm:text-[10px]">
