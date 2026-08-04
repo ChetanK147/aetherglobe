@@ -32,6 +32,10 @@ function toFetchHeaders(req: Request) {
   return headers;
 }
 
+function publicTomTomKey() {
+  return process.env.TOMTOM_API_KEY?.trim() || process.env.VITE_TOMTOM_API_KEY?.trim() || null;
+}
+
 async function startServer() {
   const app = express();
   const httpServer = createHttpServer(app);
@@ -39,6 +43,16 @@ async function startServer() {
   app.disable('x-powered-by');
   app.use(globalRateLimit);
   app.use(express.json({ limit: '32kb' }));
+
+  app.get('/api/client-config', (_req, res) => {
+    const tomtomApiKey = publicTomTomKey();
+    res
+      .setHeader('Cache-Control', 'no-store')
+      .json({
+        tomtomConfigured: Boolean(tomtomApiKey),
+        tomtomApiKey,
+      });
+  });
 
   app.all('/api/*', asyncRoute(async (req, res) => {
     const protocol = req.protocol || 'http';
