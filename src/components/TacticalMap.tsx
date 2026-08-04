@@ -2,7 +2,7 @@ import React from 'react';
 import { MapContainer, Marker, Popup, TileLayer, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { MapPin, Plane, X } from 'lucide-react';
+import { AlertTriangle, MapPin, Plane, X } from 'lucide-react';
 import { motion } from 'motion/react';
 import type { FlightData } from '../types';
 
@@ -17,6 +17,11 @@ interface TacticalMapProps {
 interface MappedFlight extends FlightData {
   distanceKm: number;
 }
+
+const TOMTOM_API_KEY = import.meta.env.VITE_TOMTOM_API_KEY?.trim() || '';
+const TOMTOM_TILE_URL = TOMTOM_API_KEY
+  ? `https://api.tomtom.com/maps/orbis/display/raster/tile/{z}/{x}/{y}?apiVersion=2&style=street-dark&tileSize=256&key=${encodeURIComponent(TOMTOM_API_KEY)}`
+  : '';
 
 const targetIcon = L.divIcon({
   className: 'bg-transparent',
@@ -101,7 +106,7 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
         <div className="flex min-w-0 items-center gap-2 sm:gap-3">
           <MapPin className="shrink-0 text-accent" size={18} />
           <h2 className="truncate font-mono text-xs font-bold uppercase tracking-widest text-accent sm:text-sm">Surface Map</h2>
-          <span className="hidden rounded border border-accent/20 bg-white/5 px-2 py-0.5 font-mono text-[10px] text-text-muted sm:inline">OSM + CARTO</span>
+          <span className="hidden rounded border border-accent/20 bg-white/5 px-2 py-0.5 font-mono text-[10px] text-text-muted sm:inline">TOMTOM ORBIS</span>
           <span className="flex items-center gap-1 rounded border border-accent/20 bg-accent/10 px-2 py-0.5 font-mono text-[10px] text-accent">
             <Plane size={11} /> {mappedFlights.length}
           </span>
@@ -112,39 +117,53 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
       </div>
 
       <div className="relative min-h-0 flex-1 bg-[#0a0a0a]">
-        <MapContainer center={[lat, lng]} zoom={8} style={{ width: '100%', height: '100%', background: '#0a0a0a' }}>
-          <FitMapView lat={lat} lng={lng} flights={mappedFlights} />
-          <TileLayer
-            url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a>'
-          />
-          {mappedFlights.map((flight) => (
-            <Marker
-              key={flight.id || `${flight.callsign}-${flight.lat}-${flight.lng}`}
-              position={[flight.lat, flight.lng]}
-              icon={createFlightIcon(flight.track, flightIntensity)}
-              zIndexOffset={200}
-            >
+        {TOMTOM_TILE_URL ? (
+          <MapContainer center={[lat, lng]} zoom={8} style={{ width: '100%', height: '100%', background: '#0a0a0a' }}>
+            <FitMapView lat={lat} lng={lng} flights={mappedFlights} />
+            <TileLayer
+              url={TOMTOM_TILE_URL}
+              maxZoom={22}
+              attribution='&copy; <a href="https://www.tomtom.com/copyright/">TomTom</a>'
+            />
+            {mappedFlights.map((flight) => (
+              <Marker
+                key={flight.id || `${flight.callsign}-${flight.lat}-${flight.lng}`}
+                position={[flight.lat, flight.lng]}
+                icon={createFlightIcon(flight.track, flightIntensity)}
+                zIndexOffset={200}
+              >
+                <Popup className="font-mono text-xs">
+                  <strong>{flight.callsign || 'Unknown flight'}</strong><br />
+                  {flight.aircraft ? `${flight.aircraft} · ` : ''}{flight.registration || 'Registration unavailable'}<br />
+                  Altitude: {flight.altitude == null ? 'Unavailable' : `${Math.round(flight.altitude)} ft`}<br />
+                  Speed: {flight.velocity == null ? 'Unavailable' : `${Math.round(flight.velocity)} kt`}<br />
+                  Heading: {flight.track == null ? 'Unavailable' : `${Math.round(flight.track)}°`}<br />
+                  Distance: approximately {Math.round(flight.distanceKm)} km
+                </Popup>
+              </Marker>
+            ))}
+            <Marker position={[lat, lng]} icon={targetIcon} zIndexOffset={500}>
               <Popup className="font-mono text-xs">
-                <strong>{flight.callsign || 'Unknown flight'}</strong><br />
-                {flight.aircraft ? `${flight.aircraft} · ` : ''}{flight.registration || 'Registration unavailable'}<br />
-                Altitude: {flight.altitude == null ? 'Unavailable' : `${Math.round(flight.altitude)} ft`}<br />
-                Speed: {flight.velocity == null ? 'Unavailable' : `${Math.round(flight.velocity)} kt`}<br />
-                Heading: {flight.track == null ? 'Unavailable' : `${Math.round(flight.track)}°`}<br />
-                Distance: approximately {Math.round(flight.distanceKm)} km
+                <strong>Selected coordinate</strong><br />
+                {lat.toFixed(5)}, {lng.toFixed(5)}
               </Popup>
             </Marker>
-          ))}
-          <Marker position={[lat, lng]} icon={targetIcon} zIndexOffset={500}>
-            <Popup className="font-mono text-xs">
-              <strong>Selected coordinate</strong><br />
-              {lat.toFixed(5)}, {lng.toFixed(5)}
-            </Popup>
-          </Marker>
-        </MapContainer>
+          </MapContainer>
+        ) : (
+          <div className="flex h-full items-center justify-center p-6">
+            <div className="max-w-md rounded-xl border border-amber-400/30 bg-black/80 p-5 font-mono text-sm text-amber-100 shadow-2xl">
+              <div className="mb-3 flex items-center gap-2 font-bold uppercase tracking-wider text-amber-300">
+                <AlertTriangle size={18} /> TomTom map not configured
+              </div>
+              <p className="leading-relaxed opacity-85">
+                Add <code className="text-accent">VITE_TOMTOM_API_KEY</code> to the build environment and redeploy. Local users can run <code className="text-accent">npm run setup:env</code>, add the key to <code className="text-accent">.env.local</code>, and restart the development server.
+              </p>
+            </div>
+          </div>
+        )}
 
         <div className="absolute bottom-3 left-3 right-3 z-[400] rounded-lg border border-white/10 bg-black/85 p-2.5 font-mono text-[9px] leading-relaxed sm:bottom-4 sm:left-4 sm:right-auto sm:max-w-sm sm:p-3 sm:text-[10px]">
-          Aircraft icons use an unofficial public feed and may be delayed, incomplete or unavailable. This map is exploratory and must not be used for navigation or operational decisions.
+          TomTom provides the basemap. Aircraft icons use separate data sources and may be delayed, incomplete, or unavailable. This map is exploratory and must not be used for navigation or operational decisions.
         </div>
       </div>
     </motion.div>
