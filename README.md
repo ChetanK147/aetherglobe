@@ -11,7 +11,7 @@ AetherGlobe is a cinematic 3D globe for exploring current location context with 
 - Local dump1090 aircraft positions when configured
 - Sampled Aviationstack live-position fallback and flight-number lookup when configured
 - Live AISstream vessel positions in the persistent local Express runtime when configured
-- OpenStreetMap/CARTO surface map
+- TomTom Orbis dark surface map with AetherGlobe aircraft overlays
 - Optional Google sign-in through Firebase
 
 The former Tactical, Cinematic, and decorative aircraft-status modes were removed because they did not provide separate functional tools.
@@ -33,8 +33,8 @@ Without optional environment variables:
 
 - place, weather, air quality, earthquake, and direct source-brief features work;
 - aircraft use the existing unofficial public fallback;
-- local dump1090, Aviationstack, and AISstream features remain disabled;
-- the UI reports unavailable optional feeds instead of exposing placeholder credentials.
+- local dump1090, Aviationstack, AISstream, and TomTom features remain disabled;
+- the TomTom surface map shows a clear configuration message rather than a broken tile layer.
 
 Node.js 22.4 or newer is required because the persistent AISstream integration uses the native server-side WebSocket implementation.
 
@@ -47,6 +47,18 @@ npm run setup:env
 ```
 
 This copies `.env.example` only when `.env.local` does not already exist. The file is ignored by Git.
+
+### TomTom surface map
+
+```text
+VITE_TOMTOM_API_KEY=your_tomtom_browser_key
+```
+
+The Surface Map uses TomTom Orbis raster tiles in the `street-dark` style while keeping AetherGlobe's existing aircraft markers, heading rotation, popups, selected-coordinate marker, and fit-to-sector behavior.
+
+A browser map key is included in tile requests and is therefore visible to site visitors. Restrict it to approved origins in the TomTom dashboard, including your production domain and deploy-preview domains. Do not reuse it as a server-side secret.
+
+Restart `npm run dev` after changing the key because Vite reads browser variables at startup.
 
 ### Local dump1090 receiver
 
@@ -78,9 +90,7 @@ AISSTREAM_MAX_POSITION_AGE_SECONDS=300
 
 The browser never receives the AISstream key. The local Express process maintains one backend WebSocket, updates its geographic subscription when the selected region changes, and exposes normalized vessel snapshots through `/api/vessels`.
 
-Restart `npm run dev` after changing `.env.local`.
-
-Never put service keys in a `VITE_` variable, React component, screenshot, or committed file.
+Server-side keys such as Aviationstack and AISstream must never use a `VITE_` prefix. Never commit `.env.local`.
 
 ## Direct source brief
 
@@ -137,7 +147,7 @@ Use:
 - Functions directory: `netlify/functions`
 - Node version: `22`
 
-Optional Aviationstack variables can be added under **Netlify → Site configuration → Environment variables**. Adding an AISstream key to Netlify alone does not create a persistent maritime feed; the relay described above is still required.
+Set `VITE_TOMTOM_API_KEY` in the **build** scope for production and deploy previews. Optional Aviationstack variables can also be added under **Netlify → Site configuration → Environment variables**. Adding an AISstream key to Netlify alone does not create a persistent maritime feed; the relay described above is still required.
 
 ## API endpoints
 
@@ -149,7 +159,7 @@ Optional Aviationstack variables can be added under **Netlify → Site configura
 - `GET /api/live/usgs`
 - `GET /api/health`
 
-`GET /api/health` reports optional integration status without returning keys or private receiver URLs.
+`GET /api/health` reports optional server integration status without returning keys or private receiver URLs. The TomTom key is a build-time browser setting and is not reported by this endpoint.
 
 ## Data sources
 
@@ -164,13 +174,14 @@ Optional Aviationstack variables can be added under **Netlify → Site configura
 | Final aircraft fallback | Unofficial public FlightRadar24 feed | Availability and accuracy are not guaranteed |
 | Commercial flight lookup | Aviationstack | Optional and on demand; fields can be absent |
 | Vessel positions | AISstream | Optional persistent backend WebSocket |
-| Surface map | OpenStreetMap and CARTO | Basemap only |
+| Surface map | TomTom Orbis Map Display API | Dark raster basemap; aircraft overlays use separate sources |
 
 ## Security model
 
 - `.env.local` is optional and ignored by Git.
-- `.env.example` contains blank secret fields and safe defaults only.
-- Service keys are read only by server code.
+- `.env.example` contains blank credential fields and safe defaults only.
+- TomTom's browser key is intentionally exposed in tile requests and should be origin-restricted.
+- Server-side service keys are read only by server code and must not use a `VITE_` prefix.
 - The AISstream subscription is sent from the backend WebSocket.
 - API routes validate inputs, limit request sizes, and apply rate limits.
 - In-memory caches and rate limits are process-local and are not a distributed quota system.
