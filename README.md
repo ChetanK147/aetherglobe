@@ -1,13 +1,16 @@
 # AetherGlobe
 
-AetherGlobe is a cinematic 3D globe for exploring current location context with clearly identified public data sources.
+AetherGlobe is a cinematic 3D globe for exploring current location context with clearly identified public data sources and OSINT-style source notes.
 
 ## Current capabilities
 
 - Interactive Three.js globe and coordinate selection
+- OSINT Brief from named public/open sources
 - Current place name from OpenStreetMap Nominatim
 - Current weather and air quality from Open-Meteo
 - M4.5+ earthquake events from USGS
+- Infrastructure signals from OpenStreetMap Overpass
+- Recent public-event and news signals from GDELT DOC 2.0
 - Local dump1090 aircraft positions when configured
 - Sampled Aviationstack live-position fallback and flight-number lookup when configured
 - Live AISstream vessel positions in the persistent local Express runtime when configured
@@ -16,7 +19,7 @@ AetherGlobe is a cinematic 3D globe for exploring current location context with 
 
 The former Tactical, Cinematic, and decorative aircraft-status modes were removed because they did not provide separate functional tools.
 
-AetherGlobe is an exploratory visualization. It is not suitable for aviation, emergency, traffic, military, maritime, or other operational decisions.
+AetherGlobe is an exploratory visualization. It is not suitable for aviation, emergency, traffic, military, maritime, targeting, surveillance, or other operational decisions.
 
 ## No environment file is required
 
@@ -31,12 +34,28 @@ Open `http://localhost:3000`.
 
 Without optional environment variables:
 
-- place, weather, air quality, earthquake, and direct source-brief features work;
+- OSINT Brief, place, weather, air quality, earthquake, infrastructure and GDELT public-event signals work from public sources;
 - aircraft use the existing unofficial public fallback;
 - local dump1090, Aviationstack, AISstream, and TomTom features remain disabled;
 - the TomTom surface map shows a clear configuration message rather than a broken tile layer.
 
 Node.js 22.4 or newer is required because the persistent AISstream integration uses the native server-side WebSocket implementation.
+
+## OSINT Brief
+
+The left Sources panel is now an **OSINT Brief**. For each selected coordinate, `/api/osint` aggregates public data directly and returns a source-labelled Markdown report.
+
+Included sections:
+
+- location identity and coordinates;
+- environmental snapshot;
+- air quality;
+- selected infrastructure within approximately 25 km;
+- recent GDELT public-event/news signals from the last 24 hours;
+- recent USGS M4.5+ seismic context;
+- source confidence and limitations.
+
+The OSINT Brief uses only public/open data and direct APIs. It does not hack, bypass login pages, collect private data, scrape social media, or use a language model for conclusions. GDELT matches are treated as signals, not confirmed incidents. OpenStreetMap/Overpass results are community-maintained; missing map data does not prove a feature is absent.
 
 ## Optional local configuration
 
@@ -92,17 +111,6 @@ The browser never receives the AISstream key. The local Express process maintain
 
 Server-side keys such as Aviationstack and AISstream must never use a `VITE_` prefix. Never commit `.env.local`.
 
-## Direct source brief
-
-The source brief uses structured public endpoints rather than scraping arbitrary webpages. For each selected coordinate, the backend directly aggregates:
-
-- OpenStreetMap Nominatim reverse geocoding
-- Open-Meteo current weather
-- Open-Meteo current air quality
-- USGS M4.5+ one-day earthquake GeoJSON
-
-No language model is used to rewrite or interpret the result.
-
 ## Aircraft source order
 
 `GET /api/flights` follows this order:
@@ -152,7 +160,8 @@ Set `TOMTOM_API_KEY` for production and deploy previews. The app exposes that br
 ## API endpoints
 
 - `GET /api/client-config` — browser-visible map configuration
-- `POST /api/intelligence` — direct current source brief
+- `POST /api/osint` — OSINT Brief from public/open sources
+- `POST /api/intelligence` — legacy direct current source brief
 - `GET /api/weather`
 - `GET /api/flights`
 - `GET /api/vessels`
@@ -166,9 +175,12 @@ Set `TOMTOM_API_KEY` for production and deploy previews. The app exposes that br
 
 | Feature | Source | Notes |
 |---|---|---|
+| OSINT Brief | Combined public sources | Source-labelled report; no language model |
 | Place name | OpenStreetMap Nominatim | Cached reverse-geocoding result |
 | Weather | Open-Meteo | Current coordinate-based observation |
 | Air quality | Open-Meteo Air Quality | Current AQI and pollutant readings |
+| Infrastructure | OpenStreetMap Overpass | Selected public map tags within approximately 25 km |
+| News/event signals | GDELT DOC 2.0 | Recent articles matching location and event terms; signals only |
 | Earthquakes | USGS | M4.5+ events from the past day |
 | Aircraft positions | Local dump1090 receiver | Preferred when configured and reachable |
 | Aircraft fallback | Aviationstack active flights | Optional sampled and cached live-position records |
@@ -184,6 +196,7 @@ Set `TOMTOM_API_KEY` for production and deploy previews. The app exposes that br
 - TomTom's browser key is intentionally exposed in tile requests and should be origin-restricted.
 - Server-side service keys are read only by server code and must not use a `VITE_` prefix.
 - The AISstream subscription is sent from the backend WebSocket.
+- OSINT collection is limited to public/open sources and named APIs.
 - API routes validate inputs, limit request sizes, and apply rate limits.
 - In-memory caches and rate limits are process-local and are not a distributed quota system.
 - Firebase project identifiers do not replace authentication controls or Firestore rules.
@@ -199,4 +212,4 @@ npm test
 npm run build
 ```
 
-Tests cover coordinate validation, direct source aggregation, no-key behavior, dump1090 filtering, Aviationstack lookup and traffic fallback, cached live-position aging, AISstream subscription formatting, vessel normalization, and serverless relay guidance without using real credentials.
+Tests cover coordinate validation, OSINT aggregation, infrastructure categorization, GDELT signal handling, direct source aggregation, no-key behavior, dump1090 filtering, Aviationstack lookup and traffic fallback, cached live-position aging, AISstream subscription formatting, vessel normalization, and serverless relay guidance without using real credentials.
