@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ChevronDown, ChevronLeft, ChevronRight, Database, MapPin, RefreshCw, Terminal, X } from 'lucide-react';
+import { ChevronDown, ChevronLeft, ChevronRight, Database, MapPin, RefreshCw, ShieldCheck, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import Markdown from 'react-markdown';
 
@@ -63,32 +63,32 @@ const IntelligenceCenter: React.FC<IntelligenceCenterProps> = ({
       <button
         type="button"
         onClick={onDesktopToggle}
-        aria-label="Expand source brief panel"
+        aria-label="Expand OSINT panel"
         className={`hidden h-full w-full flex-col items-center justify-center gap-4 border border-accent/20 bg-black/45 text-accent transition hover:bg-accent/10 ${desktopOpen ? 'lg:hidden' : 'lg:flex'}`}
       >
         <ChevronRight size={18} />
-        <span className="rotate-180 text-[0.58rem] font-black uppercase tracking-[0.22em] [writing-mode:vertical-rl]">Sources</span>
+        <span className="rotate-180 text-[0.58rem] font-black uppercase tracking-[0.22em] [writing-mode:vertical-rl]">OSINT</span>
       </button>
 
       <div className={`min-h-0 flex-1 flex-col ${desktopOpen ? 'flex' : 'flex lg:hidden'}`}>
         <div className="flex items-center justify-between border-b border-accent-dim bg-accent/5 p-3 sm:p-4">
           <div className="flex items-center gap-2">
             <Database className="text-accent" size={18} />
-            <h2 className="text-xs font-black uppercase tracking-[0.18em] text-accent sm:tracking-[0.2em]">Live Source Brief</h2>
+            <h2 className="text-xs font-black uppercase tracking-[0.18em] text-accent sm:tracking-[0.2em]">OSINT Brief</h2>
           </div>
           <div className="flex items-center gap-2">
-            <Terminal size={14} className="hidden opacity-40 sm:block" />
+            <ShieldCheck size={14} className="hidden opacity-40 sm:block" />
             {onDesktopToggle && (
               <button
                 type="button"
                 onClick={onDesktopToggle}
-                aria-label="Collapse source brief panel"
+                aria-label="Collapse OSINT panel"
                 className="hidden min-h-9 min-w-9 items-center justify-center rounded border border-accent/20 bg-black/35 text-accent transition hover:bg-accent/10 lg:flex"
               >
                 <ChevronLeft size={17} />
               </button>
             )}
-            <button type="button" onClick={onMobileClose} aria-label="Close source brief panel" className="flex min-h-10 min-w-10 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-accent lg:hidden">
+            <button type="button" onClick={onMobileClose} aria-label="Close OSINT panel" className="flex min-h-10 min-w-10 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-accent lg:hidden">
               <X size={18} />
             </button>
           </div>
@@ -102,7 +102,7 @@ const IntelligenceCenter: React.FC<IntelligenceCenterProps> = ({
                   <div className="h-12 w-12 rounded-full border-2 border-accent/20" />
                   <div className="absolute inset-0 h-12 w-12 animate-spin rounded-full border-2 border-t-accent" />
                 </div>
-                <span className="text-center text-[10px] font-bold uppercase tracking-[0.2em] animate-pulse sm:tracking-[0.25em]">Refreshing public data feeds...</span>
+                <span className="text-center text-[10px] font-bold uppercase tracking-[0.2em] animate-pulse sm:tracking-[0.25em]">Collecting OSINT sources...</span>
               </motion.div>
             ) : (
               <motion.div key="content" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="prose prose-invert prose-xs max-w-none font-mono text-[11px] leading-relaxed text-text-muted">
@@ -122,17 +122,17 @@ const IntelligenceCenter: React.FC<IntelligenceCenterProps> = ({
                   })}
                 </div>
 
-                <SectionHeading id="source-brief-content" title="Current Source Brief" open={briefOpen} onToggle={() => setBriefOpen((current) => !current)} />
+                <SectionHeading id="source-brief-content" title="Open-Source Intelligence" open={briefOpen} onToggle={() => setBriefOpen((current) => !current)} />
                 <div id="source-brief-content" className={briefOpen ? '' : 'lg:hidden'}>
                   <div className="mb-3 border border-accent/20 bg-accent/5 p-2 text-[0.62rem] text-accent/80">
-                    Compiled directly from named public data services. No language model or generated interpretation is used.
+                    Public sources only: environment, hazards, mapped infrastructure and recent news/event signals. No private data, no hacking, no operational conclusions.
                   </div>
                   {report ? (
                     <Markdown>{report}</Markdown>
                   ) : (
                     <div className="mt-4 flex flex-col items-center justify-center rounded border border-dashed border-accent-dim px-6 py-10 text-center opacity-30 sm:px-8 sm:py-12">
                       <MapPin size={32} className="mb-4" />
-                      <p className="text-[10px] font-bold uppercase leading-tight tracking-widest">Select a location to load current sourced data</p>
+                      <p className="text-[10px] font-bold uppercase leading-tight tracking-widest">Select a location to load OSINT brief</p>
                     </div>
                   )}
                 </div>
@@ -149,7 +149,7 @@ const IntelligenceCenter: React.FC<IntelligenceCenterProps> = ({
             className="flex min-h-11 w-full items-center justify-center gap-2 border border-accent/30 bg-accent/10 text-[0.68rem] font-bold uppercase tracking-widest text-accent transition hover:bg-accent/20 disabled:opacity-40"
           >
             <RefreshCw size={15} className={isLoading ? 'animate-spin' : ''} />
-            Refresh source brief
+            Refresh OSINT brief
           </button>
         </div>
       </div>
