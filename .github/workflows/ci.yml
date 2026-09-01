@@ -32,7 +32,10 @@ jobs:
         run: |
           test -f netlify.toml
           test -f netlify/functions/api.ts
+          test -f netlify/functions/osint.ts
+          test -f netlify/functions/client-config.ts
           test -f lib/api.ts
+          test -f lib/osintProviders.ts
           test -f lib/aisStreamHub.ts
       - name: Smoke test without an environment file
         run: |
