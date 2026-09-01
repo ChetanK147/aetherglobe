@@ -5,6 +5,7 @@ import { createServer as createHttpServer } from 'http';
 import { createServer as createViteServer } from 'vite';
 import dotenv from 'dotenv';
 import { handleApiRequest } from './lib/api.ts';
+import { handleOsintRequest } from './lib/osintProviders.ts';
 import { createExpressRateLimiter } from './lib/expressRateLimit.ts';
 
 dotenv.config({ path: '.env.local' });
@@ -53,6 +54,18 @@ async function startServer() {
         tomtomApiKey,
       });
   });
+
+  app.post('/api/osint', asyncRoute(async (req, res) => {
+    const protocol = req.protocol || 'http';
+    const host = req.get('host') || `127.0.0.1:${PORT}`;
+    const apiResponse = await handleOsintRequest(new globalThis.Request(`${protocol}://${host}${req.originalUrl}`, {
+      method: req.method,
+      headers: toFetchHeaders(req),
+      body: JSON.stringify(req.body ?? {}),
+    }));
+    apiResponse.headers.forEach((value, name) => res.setHeader(name, value));
+    res.status(apiResponse.status).send(await apiResponse.text());
+  }));
 
   app.all('/api/*', asyncRoute(async (req, res) => {
     const protocol = req.protocol || 'http';
