@@ -3,8 +3,8 @@ interface IntelligenceResponse {
   error?: string;
 }
 
-async function requestSourceBrief(lat: number, lng: number): Promise<string> {
-  const response = await fetch('/api/intelligence', {
+async function requestOsintBrief(lat: number, lng: number): Promise<string> {
+  const response = await fetch('/api/osint', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ lat, lng }),
@@ -12,18 +12,18 @@ async function requestSourceBrief(lat: number, lng: number): Promise<string> {
 
   const data = await response.json() as IntelligenceResponse;
   if (!response.ok) {
-    throw new Error(data.error || 'Source brief unavailable');
+    throw new Error(data.error || 'OSINT brief unavailable');
   }
-  return data.report || 'No source brief returned.';
+  return data.report || 'No OSINT brief returned.';
 }
 
 export async function getGlobalIntelligence(lat: number, lng: number) {
   try {
-    return await requestSourceBrief(lat, lng);
+    return await requestOsintBrief(lat, lng);
   } catch (error) {
-    console.error('Source brief request failed:', error);
+    console.error('OSINT brief request failed:', error);
     return error instanceof Error
-      ? `Source brief unavailable: ${error.message}`
-      : 'Source brief unavailable.';
+      ? `OSINT brief unavailable: ${error.message}`
+      : 'OSINT brief unavailable.';
   }
 }
