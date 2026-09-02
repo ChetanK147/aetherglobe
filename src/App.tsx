@@ -1,7 +1,7 @@
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { BrainCircuit, Map as MapIcon, PanelRightOpen } from 'lucide-react';
 import NavigationHUD from './components/NavigationHUD';
-import type { AppState, WeatherData } from './types';
+import type { AppState, Location, WeatherData } from './types';
 import { getGlobalIntelligence } from './services/intelligenceService';
 import { getCriticalEvents, getLiveFlights, getLiveVessels } from './services/liveDataService';
 
@@ -21,6 +21,15 @@ function weatherCodeToCondition(code: number | null): string {
   if ([71, 73, 75, 77, 85, 86].includes(code)) return 'Snow';
   if ([95, 96, 99].includes(code)) return 'Thunderstorm';
   return 'Mixed conditions';
+}
+
+function locationKey(location: Location | null) {
+  return location ? `${location.lat.toFixed(5)}:${location.lng.toFixed(5)}` : '';
+}
+
+function sameLocation(a: Location | null, b: Location | null) {
+  if (!a || !b) return a === b;
+  return Math.abs(a.lat - b.lat) < 0.00001 && Math.abs(a.lng - b.lng) < 0.00001;
 }
 
 async function fetchWeather(lat: number, lng: number): Promise<WeatherData | null> {
@@ -54,6 +63,7 @@ async function fetchWeather(lat: number, lng: number): Promise<WeatherData | nul
 export default function App() {
   const [mobilePanel, setMobilePanel] = useState<MobilePanel>(null);
   const [desktopPanels, setDesktopPanels] = useState({ intelligence: true, status: true });
+  const briefRequestId = useRef(0);
   const [state, setState] = useState<AppState>({
     userLocation: null,
     selectedLocation: null,
@@ -71,6 +81,8 @@ export default function App() {
     liveVessels: [],
     criticalEvents: [],
   });
+
+  const selectedKey = locationKey(state.selectedLocation);
 
   useEffect(() => {
     const selected = state.selectedLocation;
@@ -102,7 +114,7 @@ export default function App() {
       active = false;
       window.clearInterval(interval);
     };
-  }, [state.selectedLocation]);
+  }, [selectedKey]);
 
   useEffect(() => {
     const selected = state.selectedLocation;
@@ -128,45 +140,53 @@ export default function App() {
       active = false;
       window.clearInterval(interval);
     };
-  }, [state.selectedLocation]);
+  }, [selectedKey]);
 
-  const handleIntensityChange = (layerName: string, value: number) => {
+  const handleIntensityChange = useCallback((layerName: string, value: number) => {
     setState((previous) => ({
       ...previous,
       layerIntensities: { ...previous.layerIntensities, [layerName]: value },
     }));
-  };
+  }, []);
 
-  const refreshSourceBrief = async (lat: number, lng: number) => {
+  const refreshSourceBrief = useCallback(async (lat: number, lng: number) => {
+    const requestId = ++briefRequestId.current;
     setState((previous) => ({ ...previous, isLoading: true }));
     const [report, weather] = await Promise.all([
       getGlobalIntelligence(lat, lng),
       fetchWeather(lat, lng),
     ]);
+    if (requestId !== briefRequestId.current) return;
     setState((previous) => ({
       ...previous,
       intelligenceReport: report,
       weather,
       isLoading: false,
     }));
-  };
+  }, []);
 
-  const handleLocationSelect = (lat: number, lng: number) => {
+  const handleLocationSelect = useCallback((lat: number, lng: number) => {
     const selectedLocation = { lat, lng };
     setMobilePanel(null);
-    setState((previous) => ({
-      ...previous,
-      selectedLocation,
-      intelligenceReport: null,
-      weather: null,
-      liveFlights: [],
-      liveVessels: [],
-      criticalEvents: [],
-    }));
+    setState((previous) => {
+      if (sameLocation(previous.selectedLocation, selectedLocation)) {
+        return { ...previous, isLoading: previous.intelligenceReport ? previous.isLoading : true };
+      }
+      return {
+        ...previous,
+        selectedLocation,
+        intelligenceReport: null,
+        weather: null,
+        liveFlights: [],
+        liveVessels: [],
+        criticalEvents: [],
+        isLoading: true,
+      };
+    });
     void refreshSourceBrief(lat, lng);
-  };
+  }, [refreshSourceBrief]);
 
-  const requestGeolocation = () => {
+  const requestGeolocation = useCallback(() => {
     setState((previous) => ({ ...previous, isLoading: true }));
     if (!navigator.geolocation) {
       setState((previous) => ({ ...previous, isLoading: false }));
@@ -176,15 +196,17 @@ export default function App() {
     navigator.geolocation.getCurrentPosition(
       (position) => {
         const location = { lat: position.coords.latitude, lng: position.coords.longitude };
+        setMobilePanel(null);
         setState((previous) => ({
           ...previous,
           userLocation: location,
-          selectedLocation: location,
-          intelligenceReport: null,
-          weather: null,
-          liveFlights: [],
-          liveVessels: [],
-          criticalEvents: [],
+          selectedLocation: sameLocation(previous.selectedLocation, location) ? previous.selectedLocation : location,
+          intelligenceReport: sameLocation(previous.selectedLocation, location) ? previous.intelligenceReport : null,
+          weather: sameLocation(previous.selectedLocation, location) ? previous.weather : null,
+          liveFlights: sameLocation(previous.selectedLocation, location) ? previous.liveFlights : [],
+          liveVessels: sameLocation(previous.selectedLocation, location) ? previous.liveVessels : [],
+          criticalEvents: sameLocation(previous.selectedLocation, location) ? previous.criticalEvents : [],
+          isLoading: true,
         }));
         void refreshSourceBrief(location.lat, location.lng);
       },
@@ -192,15 +214,15 @@ export default function App() {
         console.warn('Geolocation unavailable:', error);
         setState((previous) => ({ ...previous, isLoading: false }));
       },
-      { enableHighAccuracy: true, timeout: 10_000, maximumAge: 60_000 },
+      { enableHighAccuracy: false, timeout: 10_000, maximumAge: 60_000 },
     );
-  };
+  }, [refreshSourceBrief]);
 
-  const toggleSurfaceMap = () => {
+  const toggleSurfaceMap = useCallback(() => {
     if (!state.selectedLocation) return;
     setMobilePanel(null);
     setState((previous) => ({ ...previous, surfaceViewActive: !previous.surfaceViewActive }));
-  };
+  }, [state.selectedLocation]);
 
   const desktopGridColumns = desktopPanels.intelligence
     ? desktopPanels.status
