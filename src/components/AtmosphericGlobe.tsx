@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Globe from 'react-globe.gl';
 import * as THREE from 'three';
 import type { CriticalEvent, FlightData, Location, VesselData } from '../types';
@@ -17,6 +17,24 @@ type TrafficPoint =
   | (FlightData & { kind: 'flight' })
   | (VesselData & { kind: 'vessel' });
 
+interface GlobeLabel {
+  lat: number;
+  lng: number;
+  text: string;
+  color: string;
+}
+
+interface GlobeRing {
+  lat: number;
+  lng: number;
+  maxR: number;
+  color: string;
+}
+
+const coordinateKey = (location: Location | null | undefined) => (
+  location ? `${location.lat.toFixed(5)}:${location.lng.toFixed(5)}` : ''
+);
+
 const AtmosphericGlobe: React.FC<AtmosphericGlobeProps> = ({
   onLocationSelect,
   userLocation,
@@ -27,38 +45,47 @@ const AtmosphericGlobe: React.FC<AtmosphericGlobeProps> = ({
   criticalEvents = [],
 }) => {
   const globeRef = useRef<any>(null);
+  const lastFocusedLocation = useRef('');
   const [dimensions, setDimensions] = useState({ width: window.innerWidth, height: window.innerHeight });
 
   useEffect(() => {
-    const handleResize = () => setDimensions({ width: window.innerWidth, height: window.innerHeight });
+    let frame = 0;
+    const handleResize = () => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        setDimensions((current) => {
+          if (current.width === window.innerWidth && current.height === window.innerHeight) return current;
+          return { width: window.innerWidth, height: window.innerHeight };
+        });
+      });
+    };
     window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
-
-  useEffect(() => {
-    const controls = globeRef.current?.controls();
-    if (!controls) return;
-    controls.autoRotateSpeed = 0.35;
-    controls.enableDamping = true;
-    controls.dampingFactor = 0.05;
-    controls.minDistance = 150;
-    controls.maxDistance = 500;
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener('resize', handleResize);
+    };
   }, []);
 
   useEffect(() => {
     const controls = globeRef.current?.controls();
     if (!controls) return;
     controls.autoRotate = !(targetLocation || userLocation);
+    controls.autoRotateSpeed = 0.35;
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+    controls.minDistance = 150;
+    controls.maxDistance = 500;
   }, [targetLocation, userLocation]);
 
+  const focusTarget = targetLocation || userLocation;
+  const focusKey = coordinateKey(focusTarget);
   useEffect(() => {
-    const target = targetLocation || userLocation;
-    if (target && globeRef.current) {
-      const controls = globeRef.current.controls?.();
-      if (controls) controls.autoRotate = false;
-      globeRef.current.pointOfView({ lat: target.lat, lng: target.lng, altitude: 1.5 }, 1500);
-    }
-  }, [targetLocation, userLocation]);
+    if (!focusTarget || !globeRef.current || !focusKey || lastFocusedLocation.current === focusKey) return;
+    lastFocusedLocation.current = focusKey;
+    const controls = globeRef.current.controls?.();
+    if (controls) controls.autoRotate = false;
+    globeRef.current.pointOfView({ lat: focusTarget.lat, lng: focusTarget.lng, altitude: 1.5 }, 1500);
+  }, [focusKey, focusTarget]);
 
   const cloudIntensity = layerIntensities['Satellite Cloud Cover'] ?? 0;
   useEffect(() => {
@@ -105,7 +132,7 @@ const AtmosphericGlobe: React.FC<AtmosphericGlobeProps> = ({
     };
   }, [cloudIntensity]);
 
-  const handleZoom = (direction: 'in' | 'out') => {
+  const handleZoom = useCallback((direction: 'in' | 'out') => {
     if (!globeRef.current) return;
     const current = globeRef.current.pointOfView();
     const zoomFactor = direction === 'in' ? 0.7 : 1.4;
@@ -113,19 +140,26 @@ const AtmosphericGlobe: React.FC<AtmosphericGlobeProps> = ({
       ...current,
       altitude: Math.max(0.25, Math.min(3, current.altitude * zoomFactor)),
     }, 500);
-  };
+  }, []);
+
+  const handleGlobeClick = useCallback(({ lat, lng }: { lat: number; lng: number }) => {
+    onLocationSelect?.(lat, lng);
+  }, [onLocationSelect]);
 
   const flightIntensity = layerIntensities['Global Air Traffic'] ?? 0;
   const vesselIntensity = layerIntensities['Maritime Traffic'] ?? 0;
   const seismicIntensity = layerIntensities['Seismic Activity'] ?? 0;
-  const flights = flightIntensity > 0 ? liveFlights : [];
-  const vessels = vesselIntensity > 0 ? liveVessels : [];
-  const events = seismicIntensity > 0 ? criticalEvents : [];
-  const trafficPoints: TrafficPoint[] = [
+
+  const flights = useMemo(() => (flightIntensity > 0 ? liveFlights : []), [flightIntensity, liveFlights]);
+  const vessels = useMemo(() => (vesselIntensity > 0 ? liveVessels : []), [vesselIntensity, liveVessels]);
+  const events = useMemo(() => (seismicIntensity > 0 ? criticalEvents : []), [criticalEvents, seismicIntensity]);
+
+  const trafficPoints = useMemo<TrafficPoint[]>(() => [
     ...flights.map((flight) => ({ ...flight, kind: 'flight' as const })),
     ...vessels.map((vessel) => ({ ...vessel, kind: 'vessel' as const })),
-  ];
-  const labels = [
+  ], [flights, vessels]);
+
+  const labels = useMemo<GlobeLabel[]>(() => [
     ...flights.map((flight) => ({
       lat: flight.lat,
       lng: flight.lng,
@@ -144,7 +178,42 @@ const AtmosphericGlobe: React.FC<AtmosphericGlobeProps> = ({
       text: `M${event.magnitude.toFixed(1)} ${event.place}`,
       color: `rgba(255, 77, 77, ${seismicIntensity})`,
     })),
-  ];
+  ], [events, flightIntensity, flights, vesselIntensity, vessels, seismicIntensity]);
+
+  const rings = useMemo<GlobeRing[]>(() => [
+    ...(targetLocation ? [{ ...targetLocation, maxR: 2, color: '#ff00ea' }] : []),
+    ...events.map((event) => ({
+      lat: event.lat,
+      lng: event.lng,
+      maxR: Math.max(2, event.magnitude),
+      color: `rgba(255, 77, 77, ${seismicIntensity})`,
+    })),
+  ], [events, seismicIntensity, targetLocation]);
+
+  const pointAltitude = useCallback((point: object) => {
+    const item = point as TrafficPoint;
+    if (item.kind === 'vessel') return 0.012;
+    const altitude = Number(item.altitude || 0);
+    return 0.02 + Math.min(0.15, altitude / 300_000);
+  }, []);
+
+  const pointRadius = useCallback((point: object) => ((point as TrafficPoint).kind === 'vessel' ? 0.14 : 0.18), []);
+
+  const pointColor = useCallback((point: object) => {
+    const item = point as TrafficPoint;
+    return item.kind === 'vessel'
+      ? `rgba(45, 212, 191, ${vesselIntensity})`
+      : `rgba(0, 243, 255, ${flightIntensity})`;
+  }, [flightIntensity, vesselIntensity]);
+
+  const pointLabel = useCallback((point: object) => {
+    const item = point as TrafficPoint;
+    if (item.kind === 'vessel') {
+      const speed = item.speedKnots === null ? '' : ` · ${item.speedKnots.toFixed(1)} kn`;
+      return `${item.name} · MMSI ${item.mmsi}${speed}`;
+    }
+    return `${item.callsign}${item.altitude ? ` · ${Math.round(item.altitude)} ft` : ''}`;
+  }, []);
 
   return (
     <div className="relative w-full h-full">
@@ -159,36 +228,11 @@ const AtmosphericGlobe: React.FC<AtmosphericGlobeProps> = ({
         pointsData={trafficPoints}
         pointLat="lat"
         pointLng="lng"
-        pointAltitude={(point: object) => {
-          const item = point as TrafficPoint;
-          if (item.kind === 'vessel') return 0.012;
-          const altitude = Number(item.altitude || 0);
-          return 0.02 + Math.min(0.15, altitude / 300_000);
-        }}
-        pointRadius={(point: object) => (point as TrafficPoint).kind === 'vessel' ? 0.14 : 0.18}
-        pointColor={(point: object) => {
-          const item = point as TrafficPoint;
-          return item.kind === 'vessel'
-            ? `rgba(45, 212, 191, ${vesselIntensity})`
-            : `rgba(0, 243, 255, ${flightIntensity})`;
-        }}
-        pointLabel={(point: object) => {
-          const item = point as TrafficPoint;
-          if (item.kind === 'vessel') {
-            const speed = item.speedKnots === null ? '' : ` · ${item.speedKnots.toFixed(1)} kn`;
-            return `${item.name} · MMSI ${item.mmsi}${speed}`;
-          }
-          return `${item.callsign}${item.altitude ? ` · ${Math.round(item.altitude)} ft` : ''}`;
-        }}
-        ringsData={[
-          ...(targetLocation ? [{ ...targetLocation, maxR: 2, color: '#ff00ea' }] : []),
-          ...events.map((event) => ({
-            lat: event.lat,
-            lng: event.lng,
-            maxR: Math.max(2, event.magnitude),
-            color: `rgba(255, 77, 77, ${seismicIntensity})`,
-          })),
-        ]}
+        pointAltitude={pointAltitude}
+        pointRadius={pointRadius}
+        pointColor={pointColor}
+        pointLabel={pointLabel}
+        ringsData={rings}
         ringColor="color"
         ringMaxRadius="maxR"
         ringPropagationSpeed={1}
@@ -201,7 +245,7 @@ const AtmosphericGlobe: React.FC<AtmosphericGlobeProps> = ({
         labelDotRadius={0.16}
         labelColor="color"
         labelResolution={2}
-        onGlobeClick={({ lat, lng }) => onLocationSelect?.(lat, lng)}
+        onGlobeClick={handleGlobeClick}
       />
 
       <div className="absolute right-8 bottom-32 flex flex-col gap-2 z-10 pointer-events-auto">
